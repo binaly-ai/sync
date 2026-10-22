@@ -50,6 +50,7 @@ func main() {
 		runTray()
 		return
 	}
+	attachConsole()
 	cmd, args := os.Args[1], os.Args[2:]
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -110,6 +111,10 @@ func open() (*engine.Engine, func(), error) {
 }
 
 func openBrowser(url string) error {
+	// For automated tests of the sign-in flow: write the address instead of opening a browser.
+	if f := os.Getenv("BINALY_SYNC_PRINT_URL"); f != "" {
+		return os.WriteFile(f, []byte(url), 0o600)
+	}
 	switch runtime.GOOS {
 	case "windows":
 		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()

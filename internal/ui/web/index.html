@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Binaly Sync</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><img src="icon.png" alt="" width="28" height="28"><span>Binaly Sync</span></div>
+  <nav>
+    <a href="#status" data-nav="status">Status</a>
+    <a href="#settings" data-nav="settings">Settings</a>
+  </nav>
+</header>
+<main>
+  <section id="view-status" hidden>
+    <div class="toolbar">
+      <p id="activity" class="muted">Starting...</p>
+      <div class="actions">
+        <button id="btn-add">Add folder...</button>
+        <button id="btn-pause" class="quiet">Pause</button>
+        <button id="btn-sync" class="primary">Sync now</button>
+      </div>
+    </div>
+    <div id="workspaces"></div>
+    <p id="empty" class="card" hidden>Not signed in to a workspace yet. <button id="btn-signin-empty" class="primary">Sign in</button></p>
+  </section>
+
+  <section id="view-preview" hidden>
+    <h1>Before anything is sent</h1>
+    <p class="muted">This is what Binaly Sync found. Nothing has left this computer.</p>
+    <div id="preview" class="card"><p class="muted">Looking through the folder...</p></div>
+    <div id="preview-actions" class="actions" hidden>
+      <label id="ws-pick-label" hidden>Sync to
+        <select id="ws-pick"></select>
+      </label>
+      <button id="btn-change" class="quiet">Choose another folder</button>
+      <button id="btn-start" class="primary">Start syncing</button>
+    </div>
+    <p class="note">Binaly makes the final call for each file. A few are kept back on purpose, for example spreadsheets that look like they list people's personal details. Every file that leaves this computer is written to the run log.</p>
+  </section>
+
+  <section id="view-settings" hidden>
+    <h1>Settings</h1>
+    <div class="card form">
+      <label class="row"><input type="checkbox" id="set-logon"> Start Binaly Sync when I sign in to Windows</label>
+      <label class="row">Updates
+        <select id="set-updates">
+          <option value="auto">Install automatically</option>
+          <option value="notify">Tell me, don't install</option>
+        </select>
+      </label>
+      <label class="row">Upload speed limit
+        <input type="number" id="set-bw" min="0" step="100"> KB/s <span class="muted">(0 = no limit)</span>
+      </label>
+      <div class="actions"><button id="btn-save" class="primary">Save</button><span id="saved" class="muted" hidden>Saved</span></div>
+    </div>
+    <h2>Workspaces</h2>
+    <div id="set-workspaces" class="card"></div>
+    <div class="actions"><button id="btn-signin">Add workspace...</button><button id="btn-log" class="quiet">Open run logs</button></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
