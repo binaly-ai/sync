@@ -1,0 +1,70 @@
+[
+  {
+    "in": "X:\\Lab\\Lit\\a.pdf",
+    "key": "x:/lab/lit/a.pdf"
+  },
+  {
+    "in": "x:/lab/lit/A.PDF",
+    "key": "x:/lab/lit/a.pdf"
+  },
+  {
+    "in": "X:\\\\Lab\\\\\\Lit\\",
+    "key": "x:/lab/lit"
+  },
+  {
+    "in": "Y:/Manuals/a.pdf",
+    "key": "y:/manuals/a.pdf"
+  },
+  {
+    "in": "y:\\manuals\\a.pdf",
+    "key": "y:/manuals/a.pdf"
+  },
+  {
+    "in": "\\\\nas\\Lab\\Data\\x.dat",
+    "key": "//nas/lab/data/x.dat"
+  },
+  {
+    "in": "//NAS//lab/data/",
+    "key": "//nas/lab/data"
+  },
+  {
+    "in": "\\\\localhost\\C$\\SyncTest\\Sub\\f.txt",
+    "key": "//localhost/c$/synctest/sub/f.txt"
+  },
+  {
+    "in": "/home/user/Lab/A.pdf",
+    "key": "/home/user/Lab/A.pdf"
+  },
+  {
+    "in": "/home/user//Lab/",
+    "key": "/home/user/Lab"
+  },
+  {
+    "in": "relative/Path/File.TXT",
+    "key": "relative/Path/File.TXT"
+  },
+  {
+    "in": "C:\\",
+    "key": "c:"
+  },
+  {
+    "in": "/",
+    "key": "/"
+  },
+  {
+    "in": "Z:",
+    "key": "z:"
+  },
+  {
+    "in": "C:\\Users\\Dana\\Ünïcode Fïle.pdf",
+    "key": "c:/users/dana/ünïcode fïle.pdf"
+  },
+  {
+    "in": "\\\\server\\share",
+    "key": "//server/share"
+  },
+  {
+    "in": "X:\\Lab\\Lit\\.git\\config",
+    "key": "x:/lab/lit/.git/config"
+  }
+]

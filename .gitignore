@@ -31,3 +31,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Binaly Sync
+/binaly-sync
+/binaly-sync.exe
+/dist/
+*.db
