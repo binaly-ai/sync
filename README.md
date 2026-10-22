@@ -1,5 +1,8 @@
 # Binaly Sync
 
+> **In development.** There is no release yet. The first pilots will get one directly; this
+> page will say when it's generally available.
+
 Binaly Sync keeps your lab's folders connected to [Binaly](https://binaly.ai). It runs in the
 Windows tray, notices new and changed files, and sends them to your lab's Binaly workspace,
 where your AI assistant turns them into a searchable map of the lab's work.
@@ -13,7 +16,7 @@ its own and contains no AI. For each file it reports a name, a size, a date and 
 
 ## Install (Windows)
 
-Download `binaly-sync.exe` from the [latest release](https://github.com/binaly-ai/sync/releases/latest)
+Once released: download `binaly-sync.exe` from the [latest release](https://github.com/binaly-ai/sync/releases/latest)
 and run it. It installs itself for your Windows user only (no administrator rights), opens your
 browser to sign in to Binaly, and asks which folders to sync. Before anything is sent, it shows
 you what it found.
