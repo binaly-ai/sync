@@ -57,7 +57,7 @@ type trayApp struct {
 	trigger chan engine.Options
 	ctx     context.Context
 
-	updateNow chan struct{}
+	updateNow chan updateRequest
 
 	mu       sync.Mutex
 	interval time.Duration
@@ -97,7 +97,7 @@ func runTray() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan struct{}, 1), ctx: ctx, interval: 15 * time.Minute}
+	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan updateRequest, 1), ctx: ctx, interval: 15 * time.Minute}
 	app.win = &ui.Window{B: app, DataPath: filepath.Join(config.Dir(), "webview"), OnError: app.windowError}
 	_ = os.Remove(filepath.Join(config.Dir(), "ui.url")) // from versions that served the screens on a local port
 	systray.Run(app.onReady, func() { cancel() })
@@ -125,6 +125,9 @@ func (a *trayApp) onReady() {
 	mAddWS := mWorkspaces.AddSubMenuItem("Add workspace...", "")
 	mSettings := systray.AddMenuItem("Settings", "")
 	systray.AddSeparator()
+	mVersion := systray.AddMenuItem("Binaly Sync "+versionLabel(), "")
+	mVersion.Disable()
+	mCheck := systray.AddMenuItem("Check for updates", "")
 	mQuit := systray.AddMenuItem("Quit", "")
 
 	go a.scheduler()
@@ -173,6 +176,8 @@ func (a *trayApp) onReady() {
 				a.win.Show("settings")
 			case <-mSettings.ClickedCh:
 				a.win.Show("settings")
+			case <-mCheck.ClickedCh:
+				a.CheckUpdate()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return

@@ -33,6 +33,7 @@ type Backend interface {
 	ConfirmDeletions(accountKey string)
 	OpenLog()
 	InstallUpdate()
+	CheckUpdate()
 }
 
 var ok = map[string]bool{"ok": true}
@@ -85,6 +86,8 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.OpenLog()
 	case "update":
 		b.InstallUpdate()
+	case "check-update":
+		b.CheckUpdate()
 	default:
 		return nil, errors.New("unknown request " + name)
 	}

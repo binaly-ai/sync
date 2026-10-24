@@ -91,15 +91,15 @@ function renderStatus(s) {
   }).join("");
   renderSettingsWorkspaces(s.accounts || []);
   renderUpdate(s.update || {});
-  $("version").textContent = s.version || "";
+  $("version").textContent = (s.version || "").replace(/^v/, "");
 }
 
 function renderUpdate(u) {
   const el = $("update");
   if (u.installing) {
-    el.innerHTML = `Installing Binaly Sync ${esc(u.available)}. It restarts by itself in a moment.`;
+    el.innerHTML = `Installing Binaly Sync ${esc(u.available.replace(/^v/, ""))}. It restarts by itself in a moment.`;
   } else if (u.available) {
-    el.innerHTML = `Binaly Sync ${esc(u.available)} is available. <button class="primary" data-update>Install update</button>`;
+    el.innerHTML = `Binaly Sync ${esc(u.available.replace(/^v/, ""))} is available. <button class="primary" data-update>Install update</button>`;
   } else if (u.error) {
     el.innerHTML = `<span class="muted">${esc(u.error)}</span>`;
   }
@@ -198,6 +198,7 @@ document.addEventListener("click", async (ev) => {
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
     else if (t.id === "btn-log") await call("log", {});
+    else if (t.id === "btn-check") await call("check-update", {});
     else if (t.hasAttribute("data-update")) { t.disabled = true; await call("update", {}); poll(); }
     else if (t.id === "btn-save") {
       await call("settings", { settings: { startAtLogon: $("set-logon").checked, updates: $("set-updates").value, bandwidthKBps: Number($("set-bw").value) || 0 } });
