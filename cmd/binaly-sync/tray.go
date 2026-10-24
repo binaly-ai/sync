@@ -486,11 +486,7 @@ func (a *trayApp) SignOut(accountKey string) error {
 }
 
 func (a *trayApp) PickFolder() (string, error) {
-	p, err := dialog.Directory().Title("Choose a folder to sync with Binaly").Browse()
-	if errors.Is(err, dialog.ErrCancelled) {
-		return "", nil
-	}
-	return p, err
+	return pickFolder("Choose a folder to sync with Binaly")
 }
 
 func (a *trayApp) OpenLog() {
