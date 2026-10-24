@@ -155,6 +155,7 @@ func (a *trayApp) onReady() {
 			case <-mStatus.ClickedCh:
 				a.win.Show("status")
 			case <-mCheck.ClickedCh:
+				a.win.Show("about") // the check's progress shows there
 				a.CheckUpdate()
 			case <-mQuit.ClickedCh:
 				systray.Quit()

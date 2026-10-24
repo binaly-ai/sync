@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"fyne.io/systray"
-	"github.com/sqweek/dialog"
 
 	"github.com/binaly-ai/sync/internal/install"
 	"github.com/binaly-ai/sync/internal/update"
@@ -30,11 +29,18 @@ func checker() *update.Checker {
 	return c
 }
 
-// updateStatus is what the status page shows about updates.
+// updateStatus is what the window shows about updates, as it happens: no dialog boxes.
 type updateStatus struct {
-	Available  string `json:"available,omitempty"`
-	Installing bool   `json:"installing,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// Phase: "" (idle), "checking", "downloading" or "installing".
+	Phase string `json:"phase,omitempty"`
+	// Available is a newer version found and not yet installed.
+	Available string `json:"available,omitempty"`
+	// Latest: the last check found nothing newer; CheckedAt is when.
+	Latest    bool   `json:"latest,omitempty"`
+	CheckedAt string `json:"checkedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
+	// Installing is kept for the status page's notice (Phase "downloading" or "installing").
+	Installing bool `json:"installing,omitempty"`
 }
 
 // updateRequest is what someone asked for: "Check for updates", or "Install update".
@@ -47,8 +53,8 @@ const (
 )
 
 // updater checks for a release a couple of minutes after start, then every 6 hours. With
-// automatic updates on, it installs one when no sync is running and restarts; otherwise it
-// offers it in the tray menu and on the status page. "Check for updates" always answers.
+// automatic updates on, it installs one and restarts; otherwise it offers it in the window and
+// the tray menu. Every step shows in the window (About, and the status page) as it happens.
 func (a *trayApp) updater(menu *systray.MenuItem) {
 	c := checker()
 	// A development build, or a copy run from somewhere other than its install folder,
@@ -69,53 +75,40 @@ func (a *trayApp) updater(menu *systray.MenuItem) {
 		if eligible {
 			next = time.After(6 * time.Hour)
 		}
-		manual := req != scheduled
 		if !eligible {
-			if manual {
-				tell("This copy of Binaly Sync (%s) isn't an installed release, so it doesn't update itself.", versionLabel())
+			if req != scheduled {
+				a.setUpdate(func(u *updateStatus) {
+					*u = updateStatus{Error: fmt.Sprintf("This copy of Binaly Sync (%s) isn't an installed release, so it doesn't update itself.", versionLabel())}
+				})
 			}
 			continue
 		}
+		a.setUpdate(func(u *updateStatus) { u.Phase, u.Error, u.Latest = "checking", "", false })
 		r, err := c.Latest(a.ctx, Version, runtime.GOARCH)
+		now := time.Now().Format(time.RFC3339)
 		a.setUpdate(func(u *updateStatus) {
-			u.Available, u.Error = "", errText(err)
+			u.Phase, u.Available, u.Error, u.CheckedAt = "", "", errText(err), now
+			u.Latest = err == nil && r == nil
 			if r != nil {
 				u.Available = r.Version
 			}
 		})
-		switch {
-		case err != nil:
-			if manual {
-				dialog.Message("%s", errText(err)).Title("Binaly Sync").Error()
-			}
+		if err != nil || r == nil {
 			continue
-		case r == nil:
-			if manual {
-				tell("Binaly Sync %s is the latest version.", versionLabel())
-			}
-			continue
-		case req == installNow || a.e.Cfg.Settings().Updates == "auto":
-		case req == checkNow && dialog.Message("Binaly Sync %s is available (this is %s). Install it now?\n\nIt restarts by itself; syncing carries on.", strings.TrimPrefix(r.Version, "v"), versionLabel()).Title("Binaly Sync").YesNo():
-		default:
+		}
+		if req != installNow && a.e.Cfg.Settings().Updates != "auto" {
 			menu.SetTitle("Install update " + strings.TrimPrefix(r.Version, "v"))
 			menu.Show()
 			continue
 		}
 		if err := a.applyUpdate(c, r); err != nil {
-			a.setUpdate(func(u *updateStatus) { u.Installing, u.Error = false, err.Error() })
-			if manual {
-				dialog.Message("%s", err.Error()).Title("Binaly Sync").Error()
-			}
+			a.setUpdate(func(u *updateStatus) { u.Phase, u.Installing, u.Error = "", false, err.Error() })
 		}
 	}
 }
 
 // versionLabel is the version as people read it: "0.1.1", not "v0.1.1".
 func versionLabel() string { return strings.TrimPrefix(Version, "v") }
-
-func tell(format string, args ...any) {
-	dialog.Message(format, args...).Title("Binaly Sync").Info()
-}
 
 func errText(err error) string {
 	if err == nil {
@@ -133,30 +126,40 @@ func (a *trayApp) setUpdate(f func(*updateStatus)) {
 // InstallUpdate is the "Install update" button and menu item.
 func (a *trayApp) InstallUpdate() { a.requestUpdate(installNow) }
 
-// CheckUpdate is "Check for updates", in the tray menu and on the Settings page.
+// CheckUpdate is "Check for updates" (About, and the tray menu, which opens About first).
 func (a *trayApp) CheckUpdate() { a.requestUpdate(checkNow) }
 
 func (a *trayApp) requestUpdate(r updateRequest) {
 	select {
 	case a.updateNow <- r:
-	default: // one is already under way
+	default: // one is already under way, and the window shows its progress
 	}
 }
 
-// applyUpdate downloads and verifies a release, waits for any running sync to finish, swaps
-// the executable and restarts into it. On success it doesn't return: the app quits.
+// applyUpdate downloads and verifies a release, stops any sync in progress (as Pause does:
+// what wasn't uploaded is sent after the restart, and a cut-short scan reports no deletions),
+// swaps the executable and restarts into it. It never waits for a sync to finish: a first sync
+// can run for hours. On success it doesn't return: the app quits.
 func (a *trayApp) applyUpdate(c *update.Checker, r *update.Release) error {
-	a.setUpdate(func(u *updateStatus) { u.Installing = true })
+	a.setUpdate(func(u *updateStatus) { u.Phase, u.Installing = "downloading", true })
 	dl := install.Target() + ".update"
 	if err := c.Download(a.ctx, r, dl); err != nil {
 		return fmt.Errorf("couldn't download %s: %w", r.Version, err)
 	}
-	for a.e.Snapshot().Running {
+	a.setUpdate(func(u *updateStatus) { u.Phase = "installing" })
+	a.mu.Lock()
+	cancel := a.runCancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	// Give the cancelled sync a moment to save its place.
+	for i := 0; i < 60 && a.e.Snapshot().Running; i++ {
 		select {
 		case <-a.ctx.Done():
 			os.Remove(dl)
 			return a.ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	if err := restartInto(dl); err != nil {

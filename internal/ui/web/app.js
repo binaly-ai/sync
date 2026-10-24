@@ -176,16 +176,39 @@ function renderStatus(s) {
   $("version").textContent = (s.version || "").replace(/^v/, "");
 }
 
+const ver = (v) => esc(String(v || "").replace(/^v/, ""));
+const spinner = `<span class="spinner" aria-hidden="true"></span>`;
+
+// The status page mentions an update only when there's something to see: one being installed,
+// or one waiting for "Install update" (with "tell me, don't install"). Errors show in About.
 function renderUpdate(u) {
   const el = $("update");
   if (u.installing) {
-    el.innerHTML = `Installing Binaly Sync ${esc(u.available.replace(/^v/, ""))}. It restarts by itself in a moment.`;
+    el.innerHTML = `${spinner}<span>${u.phase === "downloading" ? `Downloading Binaly Sync ${ver(u.available)}...` : `Installing Binaly Sync ${ver(u.available)}. It restarts by itself in a moment, and syncing continues after.`}</span>`;
   } else if (u.available) {
-    el.innerHTML = `Binaly Sync ${esc(u.available.replace(/^v/, ""))} is available. <button class="primary" data-update>Install update</button>`;
-  } else if (u.error) {
-    el.innerHTML = `<span class="muted">${esc(u.error)}</span>`;
+    el.innerHTML = `<span>Binaly Sync ${ver(u.available)} is available.</span><button class="primary" data-update>Install now</button>`;
   }
-  el.hidden = !(u.installing || u.available || u.error);
+  el.hidden = !(u.installing || u.available);
+  renderAboutUpdate(u);
+}
+
+// About: every step of a check, as it happens, instead of a dialog box.
+let checkClickedAt = 0;
+function renderAboutUpdate(u) {
+  const el = $("about-update");
+  if (!el) return;
+  // Just clicked: show "Checking" at once, before the program reports back.
+  const checking = u.phase === "checking" || (!u.phase && Date.now() - checkClickedAt < 1500);
+  let html = "";
+  if (checking) html = `${spinner}<span>Checking for updates...</span>`;
+  else if (u.phase === "downloading") html = `${spinner}<span>Found Binaly Sync ${ver(u.available)}. Downloading it...</span>`;
+  else if (u.phase === "installing") html = `${spinner}<span>Installing Binaly Sync ${ver(u.available)}. It restarts by itself in a moment, and syncing continues after.</span>`;
+  else if (u.error) html = `<span class="err-text">${esc(u.error)}</span><button data-check>Try again</button>`;
+  else if (u.available) html = `<span>Binaly Sync ${ver(u.available)} is available.</span><button class="primary" data-update>Install now</button>`;
+  else if (u.latest) html = `<span>You have the latest version.${u.checkedAt ? ` Checked ${new Date(u.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : ""}</span>`;
+  el.innerHTML = html;
+  el.hidden = !html;
+  $("btn-check").disabled = checking || !!u.phase;
 }
 
 async function poll() {
@@ -325,7 +348,12 @@ document.addEventListener("click", async (ev) => {
     }
     else if (t.id === "btn-log") await call("log", {});
     else if (t.dataset.link) await call("open-link", { link: t.dataset.link });
-    else if (t.id === "btn-check") await call("check-update", {});
+    else if (t.id === "btn-check" || t.hasAttribute("data-check")) {
+      checkClickedAt = Date.now();
+      renderAboutUpdate({ phase: "checking" });
+      await call("check-update", {});
+      poll();
+    }
     else if (t.hasAttribute("data-update")) { t.disabled = true; await call("update", {}); poll(); }
     else if (t.id === "btn-save") {
       await call("settings", { settings: { startAtLogon: $("set-logon").checked, updates: $("set-updates").value, bandwidthKBps: Number($("set-bw").value) || 0 } });

@@ -292,9 +292,11 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 		}
 	}()
 
-	// 2. Upload workers, fed as reports come back.
+	// 2. Upload workers, fed as reports come back. The queue has no fixed size: reporting must
+	// never wait for uploads, or a folder with more files to send than the queue held couldn't
+	// finish its first look (and show its total) until most of the uploading was done.
 	lim := upload.NewLimiter(e.Cfg.Settings().BandwidthKBps)
-	jobs := make(chan job, 10000)
+	queued, jobs := unboundedQueue()
 	var wg sync.WaitGroup
 	uploaded, uploadFailed := 0, 0
 	for i := 0; i < uploadWorkers; i++ {
@@ -352,9 +354,9 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 			continue
 		}
 		lg.Event("walked", map[string]any{"folder": root, "files": len(entries), "excluded": st.Excluded, "onlineOnly": st.OnlineOnly, "unreadable": st.Unreadable})
-		e.syncFolder(ctx, root, entries, targets, jobs, lg, opt)
+		e.syncFolder(ctx, root, entries, targets, queued, lg, opt)
 	}
-	close(jobs)
+	close(queued)
 	wg.Wait()
 	close(refreshDone)
 
@@ -559,6 +561,35 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 		rec[key] = entry
 	}
 	_ = e.State.PutReported(t.acct.Key(), t.folder.ID, rec)
+}
+
+// unboundedQueue returns a send side that never blocks and a receive side the upload workers
+// range over. Closing the send side closes the receive side once everything queued is taken.
+func unboundedQueue() (chan<- job, <-chan job) {
+	in, out := make(chan job), make(chan job)
+	go func() {
+		defer close(out)
+		var q []job
+		for in != nil || len(q) > 0 {
+			var send chan job
+			var next job
+			if len(q) > 0 {
+				send, next = out, q[0]
+			}
+			select {
+			case j, ok := <-in:
+				if !ok {
+					in = nil
+					continue
+				}
+				q = append(q, j)
+			case send <- next:
+				q[0] = job{} // let the sent job be collected
+				q = q[1:]
+			}
+		}
+	}()
+	return in, out
 }
 
 // acctRun is one workspace's part of a run.

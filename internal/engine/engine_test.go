@@ -255,3 +255,23 @@ func TestPauseMidScanReportsNoDeletions(t *testing.T) {
 		t.Fatalf("activity after a pause is %q, want Paused", s.Activity)
 	}
 }
+
+// The upload queue never makes reporting wait, keeps order, and closes once drained.
+func TestUnboundedQueue(t *testing.T) {
+	in, out := unboundedQueue()
+	const n = 50000 // far more than any fixed buffer the engine used to have
+	for i := 0; i < n; i++ {
+		in <- job{sha: fmt.Sprint(i)} // nobody is reading yet: this must not block
+	}
+	close(in)
+	i := 0
+	for j := range out {
+		if j.sha != fmt.Sprint(i) {
+			t.Fatalf("job %d came out as %s", i, j.sha)
+		}
+		i++
+	}
+	if i != n {
+		t.Fatalf("got %d jobs, want %d", i, n)
+	}
+}

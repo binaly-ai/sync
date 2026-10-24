@@ -121,6 +121,14 @@ input[type=number] { width: 110px; }
 }
 .note-box .actions { margin-top: 8px; }
 .folder-actions { margin-top: 4px; }
+.update-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.err-text { color: var(--attention); }
+#update { display: flex; align-items: center; gap: 10px; }
+.spinner {
+  width: 14px; height: 14px; flex: none; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--ink); animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .path-inline { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
