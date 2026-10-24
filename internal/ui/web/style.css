@@ -65,6 +65,15 @@ button:hover { border-color: var(--ink-soft); }
 button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 button.quiet { border-color: transparent; color: var(--ink-soft); }
 button:disabled { opacity: .5; cursor: default; }
+button.small { font-size: 13px; padding: 3px 8px; }
+.menu-wrap { position: relative; display: inline-block; }
+.menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 10; min-width: 170px;
+  display: flex; flex-direction: column; padding: 4px; border-radius: 8px;
+  background: var(--paper); border: 1px solid var(--line); box-shadow: 0 6px 18px rgba(0,0,0,.15);
+}
+.menu button { border: 0; text-align: left; border-radius: 6px; }
+.menu button:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
 select, input[type=number] {
   font: inherit; color: var(--ink); background: var(--paper);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
@@ -93,6 +102,11 @@ input[type=number] { width: 110px; }
   border-left: 3px solid var(--ochre); padding: 8px 12px; margin: 10px 0;
   background: color-mix(in srgb, var(--ochre) 10%, transparent); font-size: 14px;
 }
+.note-box {
+  border-left: 3px solid var(--ink); padding: 10px 12px; margin: 12px 0 4px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent); font-size: 14px; line-height: 1.5;
+}
+.note-box .actions { margin-top: 8px; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .preview-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin-top: 10px; }

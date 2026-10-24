@@ -58,13 +58,29 @@ function legend(p) {
   return `<div class="legend">${parts.join("")}</div>`;
 }
 
+// Sync's half is sending files; the AI assistant's half is reading them into notes, as a
+// scheduled task in Claude. Until that has processed anything, say so here and link to the
+// steps, which live on the lab's Binaly Sync page in the app (one copy, kept current there).
+function processingNote(w) {
+  const p = w.progress;
+  if (!p || !w.key || p.synced === 0 || p.processed > 0) return "";
+  return `<div class="note-box">
+    <b>Next: processing.</b> Binaly Sync sends the lab's files. Your AI assistant reads each one and
+    writes the lab's notes: a scheduled task in Claude Desktop, set up once, that runs every hour.
+    Until it runs, ${fmt(p.synced)} synced file${p.synced === 1 ? " waits" : "s wait"} here.
+    <div class="actions"><button class="primary" data-setup="${esc(w.key)}">How to set it up</button></div>
+  </div>`;
+}
+
 let last = null;
 
 function renderStatus(s) {
   last = s;
   const st = s.status || {};
   const signedIn = (s.accounts || []).length > 0;
-  $("activity").textContent = !signedIn ? "" : s.pausedUntil ? `Paused until ${new Date(s.pausedUntil).toLocaleString()}` : (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
+  const pausedText = s.pausedUntil === "until-resumed" ? "Paused until you resume"
+    : s.pausedUntil ? `Paused until ${new Date(s.pausedUntil).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "";
+  $("activity").textContent = !signedIn ? "" : pausedText || (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
   $("btn-pause").textContent = s.pausedUntil ? "Resume" : "Pause";
   $("btn-sync").disabled = !!st.running;
   const wss = st.workspaces && st.workspaces.length ? st.workspaces : (s.accounts || []).map((a) => ({ key: a.key, name: a.workspaceName, email: a.email, state: "ok" }));
@@ -81,10 +97,11 @@ function renderStatus(s) {
     const warnings = (w.warnings || []).filter((x) => !(w.folders || []).some((f) => f.warning && f.warning.reason === x));
     return `<div class="card">
       <div class="ws-head"><span class="ws-name">${esc(w.name)}</span>
-        <span>${w.email ? `<span class="muted">${esc(w.email)}</span> ` : ""}${badge ? `<span class="badge${bad ? " bad" : ""}">${esc(badge)}</span>` : ""}</span></div>
+        <span>${w.email ? `<span class="muted">${esc(w.email)}</span> ` : ""}${badge ? `<span class="badge${bad ? " bad" : ""}">${esc(badge)}</span>` : ""}${w.key ? ` <button class="quiet small" data-open="${esc(w.key)}">Open in Binaly</button>` : ""}</span></div>
       ${w.error ? `<p class="muted">${esc(w.error)}</p>` : ""}
       ${w.state === "needs-sign-in" ? `<div class="actions"><button class="primary" data-signin>Sign in again</button></div>` : ""}
       ${bar(w.progress)}${legend(w.progress)}
+      ${processingNote(w)}
       ${warnings.map((x) => `<div class="warning">${esc(x)}</div>`).join("")}
       ${folders ? `<div class="folders">${folders}</div>` : ""}
     </div>`;
@@ -183,11 +200,17 @@ function alertBox(msg) { $("activity").textContent = msg; }
 document.addEventListener("click", async (ev) => {
   const nav = ev.target.closest("[data-nav]");
   if (nav) { go(nav.dataset.nav); return; }
+  if (!ev.target.closest(".menu-wrap")) $("pause-menu").hidden = true; // a click elsewhere closes it
   const t = ev.target.closest("button");
   if (!t) return;
   try {
     if (t.id === "btn-sync") { await call("sync", {}); poll(); }
-    else if (t.id === "btn-pause") { await call("pause", { minutes: last && last.pausedUntil ? 0 : 60 }); poll(); }
+    else if (t.id === "btn-pause") {
+      if (last && last.pausedUntil) { await call("pause", { minutes: 0 }); poll(); } // Resume
+      else $("pause-menu").hidden = !$("pause-menu").hidden;
+    }
+    else if (t.dataset.pause) { $("pause-menu").hidden = true; await call("pause", { minutes: Number(t.dataset.pause) }); poll(); }
+    else if (t.dataset.open) await call("open-binaly", { accountKey: t.dataset.open });
     else if (t.id === "btn-add" || t.id === "btn-change") await pickAndPreview();
     else if (t.id === "btn-start") {
       t.disabled = true;
@@ -197,6 +220,7 @@ document.addEventListener("click", async (ev) => {
     else if (t.id === "btn-signin" || t.id === "btn-signin-empty" || t.hasAttribute("data-signin")) { await call("signin", {}); poll(); }
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
+    else if (t.dataset.setup) await call("open-setup", { accountKey: t.dataset.setup });
     else if (t.id === "btn-log") await call("log", {});
     else if (t.id === "btn-check") await call("check-update", {});
     else if (t.hasAttribute("data-update")) { t.disabled = true; await call("update", {}); poll(); }

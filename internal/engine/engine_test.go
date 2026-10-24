@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,8 @@ type fakeServer struct {
 	gone     map[string]bool     // path key -> gone
 	reports  []api.ReportIn
 	srv      *httptest.Server
+	// onReport, when set, runs after each report is stored (e.g. to pause the run mid-scan).
+	onReport func(n int)
 }
 
 func newFake(t *testing.T, folder string) *fakeServer {
@@ -61,6 +64,9 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		var in api.ReportIn
 		json.NewDecoder(r.Body).Decode(&in)
 		f.reports = append(f.reports, in)
+		if f.onReport != nil {
+			f.onReport(len(f.reports))
+		}
 		var results []api.FileResult
 		for _, fr := range in.Files {
 			k := pathx.Key(fr.Path)
@@ -212,5 +218,40 @@ func TestSyncCycle(t *testing.T) {
 	}
 	if s := e.Snapshot(); len(s.Workspaces) == 0 || len(s.Workspaces[0].Warnings) == 0 {
 		t.Fatal("an unreachable folder should leave a warning")
+	}
+}
+
+// A pause cancels the run. A full scan cut short has "not seen" most files, and must never
+// report them as deleted, nor close the scan.
+func TestPauseMidScanReportsNoDeletions(t *testing.T) {
+	e, fake, dir := setup(t)
+	for i := 0; i < 3*batchSize; i++ {
+		write(t, filepath.Join(dir, fmt.Sprintf("f%04d.pdf", i)), fmt.Sprintf("paper %d", i))
+	}
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	n := len(fake.reports)
+	fake.onReport = func(count int) {
+		if count == n+1 {
+			cancel() // pause right after the first batch of a forced full scan
+		}
+	}
+	if err := e.Run(ctx, Options{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	fake.onReport = nil
+	for _, r := range fake.reports[n:] {
+		if len(r.Deleted) > 0 || r.Last {
+			t.Fatalf("a paused scan reported deletions or closed the scan: %d deleted, last=%v", len(r.Deleted), r.Last)
+		}
+	}
+	if got := len(fake.reports) - n; got > 1 {
+		t.Fatalf("the run kept reporting after the pause: %d reports", got)
+	}
+	if s := e.Snapshot(); s.Activity != "Paused" {
+		t.Fatalf("activity after a pause is %q, want Paused", s.Activity)
 	}
 }

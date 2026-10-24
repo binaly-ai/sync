@@ -21,7 +21,15 @@
       <p id="activity" class="muted">Starting...</p>
       <div class="actions">
         <button id="btn-add">Add folder...</button>
-        <button id="btn-pause" class="quiet">Pause</button>
+        <span class="menu-wrap">
+          <button id="btn-pause" class="quiet" aria-haspopup="true">Pause</button>
+          <span id="pause-menu" class="menu" role="menu" hidden>
+            <button role="menuitem" data-pause="60">For 1 hour</button>
+            <button role="menuitem" data-pause="360">For 6 hours</button>
+            <button role="menuitem" data-pause="1440">For 24 hours</button>
+            <button role="menuitem" data-pause="-1">Until I resume</button>
+          </span>
+        </span>
         <button id="btn-sync" class="primary">Sync now</button>
       </div>
     </div>

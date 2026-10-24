@@ -60,13 +60,10 @@ type trayApp struct {
 
 	updateNow chan updateRequest
 
-	// "Open in Binaly": one item with one lab, a submenu with one entry per lab otherwise.
-	mOpen, mOpenIn *systray.MenuItem
-	openItems      map[string]*systray.MenuItem // account key -> submenu entry
-
-	mu       sync.Mutex
-	interval time.Duration
-	update   updateStatus
+	mu        sync.Mutex
+	interval  time.Duration
+	runCancel context.CancelFunc // the sync in progress, so Pause can stop it
+	update    updateStatus
 }
 
 func runTray() {
@@ -120,30 +117,18 @@ func (a *trayApp) onReady() {
 	systray.SetTitle("Binaly Sync")
 	systray.SetTooltip("Binaly Sync")
 
+	// The tray is for opening the window and keeping the program current; everything else
+	// lives in the window, so there's one place for each thing. A left click opens the window,
+	// a right click shows this menu.
 	mUpdate := systray.AddMenuItem("Install update", "A newer version of Binaly Sync is available")
 	mUpdate.Hide()
-	mStatus := systray.AddMenuItem("Open Binaly Sync", "Progress and folders")
-	mSync := systray.AddMenuItem("Sync now", "")
-	mPause := systray.AddMenuItem("Pause", "")
-	mPause1 := mPause.AddSubMenuItem("For 1 hour", "")
-	mPauseDay := mPause.AddSubMenuItem("Until tomorrow", "")
-	mResume := mPause.AddSubMenuItem("Resume", "")
-	mAdd := systray.AddMenuItem("Add folder...", "")
-	a.mOpen = systray.AddMenuItem("Open in Binaly", "Your lab in the Binaly app")
-	a.mOpenIn = systray.AddMenuItem("Open in Binaly", "Choose a lab")
-	a.mOpenIn.Hide()
-	a.openItems = map[string]*systray.MenuItem{}
-	a.refreshOpenMenu()
-	systray.AddSeparator()
-	mLog := systray.AddMenuItem("Show log", "")
-	mWorkspaces := systray.AddMenuItem("Workspaces", "")
-	mAddWS := mWorkspaces.AddSubMenuItem("Add workspace...", "")
-	mSettings := systray.AddMenuItem("Settings", "")
+	mStatus := systray.AddMenuItem("Open Binaly Sync", "Progress, folders and settings")
 	systray.AddSeparator()
 	mVersion := systray.AddMenuItem("Binaly Sync "+versionLabel(), "")
 	mVersion.Disable()
 	mCheck := systray.AddMenuItem("Check for updates", "")
 	mQuit := systray.AddMenuItem("Quit", "")
+	systray.SetOnTapped(func() { a.win.Show("status") })
 
 	go a.scheduler()
 	go a.refreshTray()
@@ -169,30 +154,6 @@ func (a *trayApp) onReady() {
 				a.InstallUpdate()
 			case <-mStatus.ClickedCh:
 				a.win.Show("status")
-			case <-mSync.ClickedCh:
-				a.SyncNow()
-			case <-mPause1.ClickedCh:
-				a.Pause(time.Hour)
-			case <-mPauseDay.ClickedCh:
-				now := time.Now()
-				tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 8, 0, 0, 0, now.Location())
-				a.Pause(time.Until(tomorrow))
-			case <-mResume.ClickedCh:
-				a.Resume()
-			case <-mAdd.ClickedCh:
-				go a.addFolderFlow()
-			case <-a.mOpen.ClickedCh:
-				if accts := a.e.Cfg.Accounts(); len(accts) > 0 {
-					a.openInBinaly(accts[0])
-				}
-			case <-mLog.ClickedCh:
-				a.OpenLog()
-			case <-mAddWS.ClickedCh:
-				go func() { _ = a.SignIn() }()
-			case <-mWorkspaces.ClickedCh:
-				a.win.Show("settings")
-			case <-mSettings.ClickedCh:
-				a.win.Show("settings")
 			case <-mCheck.ClickedCh:
 				a.CheckUpdate()
 			case <-mQuit.ClickedCh:
@@ -206,7 +167,15 @@ func (a *trayApp) onReady() {
 // scheduler runs a sync at start, every interval, and on demand.
 func (a *trayApp) scheduler() {
 	run := func(opt engine.Options) {
-		_ = a.e.Run(a.ctx, opt)
+		ctx, cancel := context.WithCancel(a.ctx)
+		a.mu.Lock()
+		a.runCancel = cancel
+		a.mu.Unlock()
+		_ = a.e.Run(ctx, opt)
+		a.mu.Lock()
+		a.runCancel = nil
+		a.mu.Unlock()
+		cancel()
 		if s := a.e.Snapshot(); len(s.Workspaces) > 0 {
 			a.mu.Lock()
 			a.interval = 15 * time.Minute
@@ -234,7 +203,6 @@ func (a *trayApp) refreshTray() {
 	var lastIcon []byte
 	for {
 		s := a.e.Snapshot()
-		a.refreshOpenMenu()
 		iconNormal, iconAttention, iconPaused := trayIcons()
 		icon, tip := iconNormal, "Binaly Sync: up to date"
 		var p api.Progress
@@ -277,12 +245,18 @@ func (a *trayApp) refreshTray() {
 	}
 }
 
+// pausedUntil is what the window shows: "" when running, config.PausedIndefinitely, or the
+// RFC 3339 time the pause ends.
 func (a *trayApp) pausedUntil() string {
-	u := a.e.Cfg.Settings().PausedUntil
-	if t, err := time.Parse(time.RFC3339, u); err == nil && time.Now().Before(t) {
-		return u
+	paused, until := a.e.Cfg.Settings().Paused(time.Now())
+	switch {
+	case !paused:
+		return ""
+	case until.IsZero():
+		return config.PausedIndefinitely
+	default:
+		return until.Format(time.RFC3339)
 	}
-	return ""
 }
 
 func (a *trayApp) addFolderFlow() {
@@ -315,41 +289,23 @@ func (a *trayApp) openInBinaly(acct config.Account) {
 	_ = openBrowser(appURL(acct.Server) + "/?group_id=" + url.QueryEscape(acct.WorkspaceID))
 }
 
-// refreshOpenMenu keeps "Open in Binaly" in step with the signed-in labs: a plain item for one,
-// a submenu naming each lab for several. Labs can be added or signed out while the app runs.
-func (a *trayApp) refreshOpenMenu() {
-	accts := a.e.Cfg.Accounts()
-	if len(accts) < 2 {
-		a.mOpenIn.Hide()
-		a.mOpen.Show()
-		return
-	}
-	a.mOpen.Hide()
-	a.mOpenIn.Show()
-	live := map[string]bool{}
-	for _, acct := range accts {
-		key := acct.Key()
-		live[key] = true
-		if item, ok := a.openItems[key]; ok {
-			item.SetTitle(acct.WorkspaceName)
-			item.Show()
-			continue
+// OpenInBinaly opens one lab in the web app (each lab's card in the window has the button).
+func (a *trayApp) OpenInBinaly(accountKey string) {
+	for _, acct := range a.e.Cfg.Accounts() {
+		if acct.Key() == accountKey {
+			a.openInBinaly(acct)
+			return
 		}
-		item := a.mOpenIn.AddSubMenuItem(acct.WorkspaceName, acct.Email)
-		a.openItems[key] = item
-		go func(key string) {
-			for range item.ClickedCh {
-				for _, x := range a.e.Cfg.Accounts() {
-					if x.Key() == key {
-						a.openInBinaly(x)
-					}
-				}
-			}
-		}(key)
 	}
-	for key, item := range a.openItems {
-		if !live[key] {
-			item.Hide()
+}
+
+// OpenSetup opens a lab's Binaly Sync page in the app at "Set up processing": the steps for the
+// scheduled task in Claude, kept in one place (the server) so the window can't drift from them.
+func (a *trayApp) OpenSetup(accountKey string) {
+	for _, acct := range a.e.Cfg.Accounts() {
+		if acct.Key() == accountKey {
+			_ = openBrowser(appURL(acct.Server) + "/sync?group_id=" + url.QueryEscape(acct.WorkspaceID) + "#processing")
+			return
 		}
 	}
 }
@@ -444,8 +400,21 @@ func (a *trayApp) ConfirmDeletions(accountKey string) {
 	}
 }
 
+// Pause stops syncing for d, or until the person resumes when d is 0. A sync in progress
+// stops now: what it hadn't uploaded is sent at the next run, and a scan cut short reports
+// no deletions.
 func (a *trayApp) Pause(d time.Duration) {
-	_ = a.e.Cfg.UpdateSettings(func(s *config.Settings) { s.PausedUntil = time.Now().Add(d).Format(time.RFC3339) })
+	until := config.PausedIndefinitely
+	if d > 0 {
+		until = time.Now().Add(d).Format(time.RFC3339)
+	}
+	_ = a.e.Cfg.UpdateSettings(func(s *config.Settings) { s.PausedUntil = until })
+	a.mu.Lock()
+	cancel := a.runCancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (a *trayApp) Resume() {

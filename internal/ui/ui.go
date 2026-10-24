@@ -34,6 +34,8 @@ type Backend interface {
 	OpenLog()
 	InstallUpdate()
 	CheckUpdate()
+	OpenSetup(accountKey string)
+	OpenInBinaly(accountKey string)
 }
 
 var ok = map[string]bool{"ok": true}
@@ -71,9 +73,13 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 	case "sync":
 		b.SyncNow()
 	case "pause":
-		if in.Minutes > 0 {
+		// minutes > 0: pause that long; -1: until resumed; 0: resume.
+		switch {
+		case in.Minutes > 0:
 			b.Pause(time.Duration(in.Minutes) * time.Minute)
-		} else {
+		case in.Minutes < 0:
+			b.Pause(0)
+		default:
 			b.Resume()
 		}
 	case "signin":
@@ -88,6 +94,10 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.InstallUpdate()
 	case "check-update":
 		b.CheckUpdate()
+	case "open-setup":
+		b.OpenSetup(in.AccountKey)
+	case "open-binaly":
+		b.OpenInBinaly(in.AccountKey)
 	default:
 		return nil, errors.New("unknown request " + name)
 	}

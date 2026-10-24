@@ -32,6 +32,8 @@ const (
 	// A workspace gets a full report (every file) at least this often, so its server-side
 	// sweep catches anything an incremental run missed.
 	fullEvery = 24 * time.Hour
+	// How often a run refreshes the bar from the server while it reports and uploads.
+	progressRefresh = 15 * time.Second
 )
 
 // Options shape one run.
@@ -192,11 +194,13 @@ type job struct {
 
 // Run performs one sync across every signed-in workspace.
 func (e *Engine) Run(ctx context.Context, opt Options) error {
-	if until := e.Cfg.Settings().PausedUntil; until != "" {
-		if t, err := time.Parse(time.RFC3339, until); err == nil && time.Now().Before(t) {
-			e.setActivity("Paused until %s", t.Local().Format("Mon 15:04"))
-			return nil
+	if paused, until := e.Cfg.Settings().Paused(time.Now()); paused {
+		if until.IsZero() {
+			e.setActivity("Paused until you resume")
+		} else {
+			e.setActivity("Paused until %s", until.Local().Format("Mon 15:04"))
 		}
+		return nil
 	}
 	e.mu.Lock()
 	if e.status.Running {
@@ -226,13 +230,6 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 	byFolder := map[string][]*target{} // folder path key -> every workspace syncing it
 	folderPath := map[string]string{}
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
-	type acctRun struct {
-		acct   config.Account
-		client *api.Client
-		ws     *WorkspaceStatus
-		counts map[string]int
-		errs   []string
-	}
 	var runs []*acctRun
 	accounts := filterAccounts(e.Cfg.Accounts(), opt.Workspace)
 	for _, a := range accounts {
@@ -276,6 +273,25 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 	e.status.Workspaces = statuses
 	e.mu.Unlock()
 
+	// The bar and the folder list come from the server, which counts files as they're reported
+	// and uploaded. A first sync of a big folder is one long run, so refresh them during it,
+	// not only at the end: otherwise the window says "Counting files..." while it uploads.
+	refreshDone := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(progressRefresh)
+		defer tick.Stop()
+		for {
+			select {
+			case <-refreshDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				e.refreshProgress(ctx, runs)
+			}
+		}
+	}()
+
 	// 2. Upload workers, fed as reports come back.
 	lim := upload.NewLimiter(e.Cfg.Settings().BandwidthKBps)
 	jobs := make(chan job, 10000)
@@ -286,11 +302,22 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				if ctx.Err() != nil {
+					// Paused or quitting: drop the rest quietly. Each file is still marked as
+					// not uploaded, so the next run sends it.
+					e.mu.Lock()
+					e.status.Uploading.Files--
+					e.status.Uploading.Bytes -= j.entry.Size
+					e.mu.Unlock()
+					continue
+				}
 				err := e.uploadOne(ctx, j, lim)
 				e.mu.Lock()
 				e.status.Uploading.Files--
 				e.status.Uploading.Bytes -= j.entry.Size
-				if err != nil {
+				if err != nil && ctx.Err() != nil {
+					// Cut off mid-upload by a pause: not a failure.
+				} else if err != nil {
 					uploadFailed++
 					lg.Event("upload-failed", map[string]any{"path": j.entry.Path, "error": err.Error()})
 				} else {
@@ -309,6 +336,9 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		if ctx.Err() != nil {
+			break
+		}
 		targets := byFolder[key]
 		root := folderPath[key]
 		e.setActivity("Looking through %s", root)
@@ -326,6 +356,7 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 	}
 	close(jobs)
 	wg.Wait()
+	close(refreshDone)
 
 	// 4. Tell each workspace how the run went, and refresh its bar.
 	for _, r := range runs {
@@ -335,17 +366,16 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 			MachineID: r.acct.MachineID, OK: uploadFailed == 0, DurationMs: time.Since(started).Milliseconds(),
 			Counts: r.counts, Errors: r.ws.Warnings, Unsynced: unsyncedSiblings(byFolder),
 		})
-		if pr, err := r.client.GetProgress(ctx); err == nil {
-			p := pr.Overall
-			e.mu.Lock()
-			r.ws.Progress = &p
-			r.ws.Folders = pr.Folders
-			e.mu.Unlock()
-		}
 	}
+	e.refreshProgress(ctx, runs)
 	e.mu.Lock()
 	e.status.Workspaces = statuses
 	e.mu.Unlock()
+	if ctx.Err() != nil {
+		e.setActivity("Paused")
+		lg.Event("stopped", map[string]any{"uploaded": uploaded, "seconds": int(time.Since(started).Seconds())})
+		return nil
+	}
 	e.setActivity("Up to date")
 	lg.Event("done", map[string]any{"uploaded": uploaded, "uploadFailed": uploadFailed, "seconds": int(time.Since(started).Seconds())})
 	return nil
@@ -385,6 +415,11 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		if end > len(entries) {
 			end = len(entries)
 		}
+		// Paused (or quitting): stop here. Returning before the deletions step below matters - a
+		// walk cut short has "not seen" most files, and must never report them as deleted.
+		if ctx.Err() != nil {
+			return
+		}
 		chunk := entries[start:end]
 		e.setActivity("Checking files in %s (%d of %d)", root, end, len(entries))
 
@@ -392,6 +427,9 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		hashes := map[string]string{}
 		fresh := map[string]state.Hash{}
 		for _, en := range chunk {
+			if ctx.Err() != nil {
+				return
+			}
 			key := pathx.Key(pathx.Canonical(en.Path))
 			if sha, ok := e.State.CachedHash(key, en.Size, en.ModTime.UnixNano()); ok {
 				hashes[key] = sha
@@ -446,7 +484,10 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		}
 	}
 
-	// Deletions, then close the scan.
+	// Deletions, then close the scan - only after a walk that ran to the end.
+	if ctx.Err() != nil {
+		return
+	}
 	for _, t := range targets {
 		var deleted []string
 		var deletedKeys []string
@@ -518,6 +559,31 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 		rec[key] = entry
 	}
 	_ = e.State.PutReported(t.acct.Key(), t.folder.ID, rec)
+}
+
+// acctRun is one workspace's part of a run.
+type acctRun struct {
+	acct   config.Account
+	client *api.Client
+	ws     *WorkspaceStatus
+	counts map[string]int
+	errs   []string
+}
+
+// refreshProgress asks each workspace for its bar and folder list. A failed request leaves the
+// last numbers in place; the next refresh tries again.
+func (e *Engine) refreshProgress(ctx context.Context, runs []*acctRun) {
+	for _, r := range runs {
+		pr, err := r.client.GetProgress(ctx)
+		if err != nil {
+			continue
+		}
+		p := pr.Overall
+		e.mu.Lock()
+		r.ws.Progress = &p
+		r.ws.Folders = pr.Folders
+		e.mu.Unlock()
+	}
 }
 
 func (e *Engine) uploadOne(ctx context.Context, j job, lim *upload.Limiter) error {

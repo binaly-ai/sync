@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // DefaultServer is where Binaly Sync talks to unless told otherwise.
@@ -51,8 +52,22 @@ type Settings struct {
 	Updates string `json:"updates"`
 	// BandwidthKBps limits uploads; 0 means no limit.
 	BandwidthKBps int `json:"bandwidthKBps"`
-	// PausedUntil, RFC 3339, empty when running.
+	// PausedUntil, RFC 3339, empty when running, or PausedIndefinitely ("until I resume").
 	PausedUntil string `json:"pausedUntil,omitempty"`
+}
+
+// PausedIndefinitely is PausedUntil for a pause that lasts until the person resumes.
+const PausedIndefinitely = "until-resumed"
+
+// Paused reports whether syncing is paused at now, and until when (zero for "until I resume").
+func (s Settings) Paused(now time.Time) (bool, time.Time) {
+	if s.PausedUntil == PausedIndefinitely {
+		return true, time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, s.PausedUntil); err == nil && now.Before(t) {
+		return true, t
+	}
+	return false, time.Time{}
 }
 
 // File is everything stored in config.json.
