@@ -340,24 +340,68 @@ func (a *trayApp) Status() any {
 	return map[string]any{"status": a.e.Snapshot(), "accounts": accts, "pausedUntil": a.pausedUntil(), "version": Version, "update": upd}
 }
 
-// previewView adds the limit the page shows.
+// previewView adds what the page needs beyond the counts: the limit, and whether the folder is
+// already synced as part of another one (per workspace, since each lab syncs its own folders).
 type previewView struct {
 	PreviewResult
 	UploadLimit int64
+	// Folders already synced that contain this one, by workspace (account key).
+	InsideOf []containingFolder
+}
+
+type containingFolder struct {
+	AccountKey string
+	Workspace  string
+	Folder     string
+}
+
+// containing lists the synced folders that already include path, from the latest status.
+func (a *trayApp) containing(path string) []containingFolder {
+	var out []containingFolder
+	for _, w := range a.e.Snapshot().Workspaces {
+		for _, f := range w.Folders {
+			if pathx.IsUnder(f.Path, path) {
+				out = append(out, containingFolder{AccountKey: w.Key, Workspace: w.Name, Folder: f.Path})
+			}
+		}
+	}
+	return out
 }
 
 func (a *trayApp) Preview(folder string) (any, error) {
 	if folder == "" {
 		return nil, errors.New("no folder chosen")
 	}
-	if svc := scan.CloudDrive(pathx.Canonical(folder)); svc != "" {
+	p := pathx.Canonical(folder)
+	if svc := scan.CloudDrive(p); svc != "" {
 		return nil, fmt.Errorf("%s is on %s. Its files download in full whenever anything reads them, so syncing it would download the whole drive. Binaly Sync doesn't sync cloud drives yet", folder, svc)
 	}
 	r, err := Preview(folder, api.DefaultPolicy)
 	if err != nil {
 		return nil, err
 	}
-	return previewView{r, api.DefaultPolicy.UploadLimitBytes}, nil
+	return previewView{r, api.DefaultPolicy.UploadLimitBytes, a.containing(p)}, nil
+}
+
+// RemoveFolder stops this computer syncing one folder for one workspace. Files already in
+// Binaly, and notes made from them, stay; another computer syncing the same folder carries on.
+func (a *trayApp) RemoveFolder(accountKey, folderID string) error {
+	for _, acct := range a.e.Cfg.Accounts() {
+		if acct.Key() != accountKey {
+			continue
+		}
+		h, err := a.e.Hello(a.ctx, acct)
+		if err != nil {
+			return err
+		}
+		if err := a.e.Client(a.ctx, acct).LeaveFolder(a.ctx, h.MachineID, folderID); err != nil {
+			return err
+		}
+		_ = a.e.State.DropFolder(acct.Key(), folderID)
+		a.SyncNow() // refreshes the folder list and the bar
+		return nil
+	}
+	return errors.New("that workspace isn't signed in on this computer")
 }
 
 func (a *trayApp) Start(folder, accountKey string) error {
@@ -375,6 +419,13 @@ func (a *trayApp) Start(folder, accountKey string) error {
 	h, err := a.e.Hello(a.ctx, *acct)
 	if err != nil {
 		return err
+	}
+	// Already covered by a folder this computer syncs for this lab: adding it would only walk
+	// the same files twice. (A folder that CONTAINS a synced one is fine: it covers more.)
+	for _, f := range h.Folders {
+		if pathx.IsUnder(f.Path, p) {
+			return fmt.Errorf("%s is already synced, as part of %s. Adding it separately changes nothing", p, f.Path)
+		}
 	}
 	if _, _, err := a.e.Client(a.ctx, *acct).AddFolder(a.ctx, h.MachineID, p); err != nil {
 		return err

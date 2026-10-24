@@ -120,6 +120,8 @@ input[type=number] { width: 110px; }
   background: color-mix(in srgb, var(--ink) 6%, transparent); font-size: 14px; line-height: 1.5;
 }
 .note-box .actions { margin-top: 8px; }
+.folder-actions { margin-top: 4px; }
+.path-inline { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .preview-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin-top: 10px; }

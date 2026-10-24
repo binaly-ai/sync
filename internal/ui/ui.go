@@ -36,6 +36,7 @@ type Backend interface {
 	CheckUpdate()
 	OpenSetup(accountKey string)
 	OpenInBinaly(accountKey string)
+	RemoveFolder(accountKey, folderID string) error
 	// OpenURL opens an address in the person's browser.
 	OpenURL(url string)
 }
@@ -57,6 +58,7 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		AccountKey string          `json:"accountKey"`
 		Minutes    int             `json:"minutes"`
 		Link       string          `json:"link"`
+		FolderID   string          `json:"folderId"`
 		Settings   json.RawMessage `json:"settings"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -107,6 +109,8 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.CheckUpdate()
 	case "open-setup":
 		b.OpenSetup(in.AccountKey)
+	case "remove-folder":
+		return ok, b.RemoveFolder(in.AccountKey, in.FolderID)
 	case "open-link":
 		u, known := Links[in.Link]
 		if !known {

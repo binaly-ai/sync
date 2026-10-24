@@ -119,6 +119,8 @@ function processingNote(w) {
 }
 
 let last = null;
+// The folder whose "Stop syncing" is asking for confirmation, if any.
+let removing = "";
 
 function renderStatus(s) {
   last = s;
@@ -144,6 +146,12 @@ function renderStatus(s) {
         <div class="path">${esc(f.path)}</div>
         ${bar(f, true)}${compactLegend(f)}
         ${f.warning ? `<div class="warning">${esc(f.warning.reason)}<div class="actions"><button data-confirm="${esc(w.key)}">These files really were removed</button></div></div>` : ""}
+        ${removing === f.id
+          ? `<div class="note-box"><b>Stop syncing this folder from this computer?</b> Files already in Binaly, and the notes made from them, stay. ${parentOf(f, w.folders)
+              ? `Its files stay synced as part of <span class="path-inline">${esc(parentOf(f, w.folders).path)}</span>, so nothing else changes.`
+              : "New and changed files in this folder won't be sent from this computer. If another computer also syncs it, that computer keeps going."}
+              <div class="actions"><button class="primary" data-remove-yes="${esc(f.id)}" data-key="${esc(w.key)}">Stop syncing</button><button class="quiet" data-remove-no>Cancel</button></div></div>`
+          : `<div class="folder-actions"><button class="quiet small" data-remove="${esc(f.id)}">Stop syncing</button></div>`}
       </div>`).join("");
     const warnings = (w.warnings || []).filter((x) => !(w.folders || []).some((f) => f.warning && f.warning.reason === x));
     return `<div class="card">
@@ -158,6 +166,12 @@ function renderStatus(s) {
     </div>`;
   }).join("");
   renderSettingsWorkspaces(s.accounts || []);
+  // The preview can open before the first status arrives (first run): fill in the labs and
+  // the "already synced" check once they're known.
+  if (!$("view-preview").hidden && $("inside-note") && !$("ws-pick").options.length && (s.accounts || []).length) {
+    fillWsPick();
+    updateInsideNote();
+  }
   renderUpdate(s.update || {});
   $("version").textContent = (s.version || "").replace(/^v/, "");
 }
@@ -180,6 +194,34 @@ async function poll() {
 
 // ---- preview ----
 let previewFolder = "";
+// Synced folders that already contain the previewed one, per lab. Adding it to such a lab
+// changes nothing (its files are already covered), so Start is off and the page says why.
+// A synced folder (of the same lab) that contains this one, if any.
+function parentOf(f, folders) {
+  const key = (p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const k = key(f.path);
+  return (folders || []).find((o) => o.id !== f.id && k.startsWith(key(o.path) + "/"));
+}
+
+let previewInsideOf = [];
+let previewFolderKey = "";
+function fillWsPick() {
+  const accts = (last && last.accounts) || [];
+  $("ws-pick").innerHTML = accts.map((a) => `<option value="${esc(a.key)}">${esc(a.workspaceName)}</option>`).join("");
+  $("ws-pick-label").hidden = accts.length < 2;
+}
+function updateInsideNote() {
+  const accts = (last && last.accounts) || [];
+  const key = $("ws-pick").value || (accts[0] && accts[0].key) || "";
+  const hit = previewInsideOf.find((x) => x.AccountKey === key);
+  const same = hit && hit.Folder.replace(/[\\/]+$/, "").toLowerCase() === previewFolderKey;
+  $("inside-note").innerHTML = !hit ? ""
+    : same
+      ? `<div class="note-box"><b>Already synced.</b> This computer already syncs this folder to ${esc(hit.Workspace)}.</div>`
+      : `<div class="note-box"><b>Already synced.</b> This folder is part of <span class="path-inline">${esc(hit.Folder)}</span>, which this computer already syncs to ${esc(hit.Workspace)}. Its files are already covered, so adding it separately changes nothing.</div>`;
+  $("btn-start").disabled = accts.length === 0 || !!hit;
+}
+
 async function showPreview(folder) {
   previewFolder = folder;
   $("preview-actions").hidden = true;
@@ -190,16 +232,17 @@ async function showPreview(folder) {
       <div class="path">${esc(r.Folder)}</div>
       <p><b>${fmt(r.Files)}</b> files, ${human(r.Bytes)}</p>
       <div class="preview-grid">
-        <span class="n">${fmt(r.WillUpload)}</span><span>will upload (up to ${human(r.UploadLimit)} each)</span>
-        <span class="n">${fmt(r.RegisterOnly)}</span><span>registered only (larger; Claude reads these from the drive)</span>
-        <span class="n">${fmt(r.Excluded)}</span><span>skipped (lock files, temp files, system folders)</span>
-        ${r.OnlineOnly ? `<span class="n">${fmt(r.OnlineOnly)}</span><span>online only (cloud files not on this disk; not synced)</span>` : ""}
-        ${r.Unreadable ? `<span class="n">${fmt(r.Unreadable)}</span><span>unreadable (no permission)</span>` : ""}
-      </div>`;
-    const accts = (last && last.accounts) || [];
-    $("ws-pick").innerHTML = accts.map((a) => `<option value="${esc(a.key)}">${esc(a.workspaceName)}</option>`).join("");
-    $("ws-pick-label").hidden = accts.length < 2;
-    $("btn-start").disabled = accts.length === 0;
+        <span class="n">${fmt(r.WillUpload)}</span><span>will be uploaded to Binaly (up to ${human(r.UploadLimit)} each)</span>
+        <span class="n">${fmt(r.RegisterOnly)}</span><span>too large to upload: Binaly records them, and the LLM reads them directly from this drive</span>
+        <span class="n">${fmt(r.Excluded)}</span><span>skipped: lock files, temporary files and system folders</span>
+        ${r.OnlineOnly ? `<span class="n">${fmt(r.OnlineOnly)}</span><span>online only: cloud files not on this disk, so not synced</span>` : ""}
+        ${r.Unreadable ? `<span class="n">${fmt(r.Unreadable)}</span><span>unreadable: no permission to open them</span>` : ""}
+      </div>
+      <div id="inside-note"></div>`;
+    previewInsideOf = r.InsideOf || [];
+    previewFolderKey = String(r.Folder || "").replace(/[\\/]+$/, "").toLowerCase();
+    fillWsPick();
+    updateInsideNote();
     $("preview-actions").hidden = false;
   } catch (e) {
     $("preview").innerHTML = `<p>${esc(e.message)}</p>`;
@@ -272,6 +315,14 @@ document.addEventListener("click", async (ev) => {
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
     else if (t.dataset.setup) await call("open-setup", { accountKey: t.dataset.setup });
+    else if (t.dataset.remove) { removing = t.dataset.remove; renderStatus(last); }
+    else if (t.hasAttribute("data-remove-no")) { removing = ""; renderStatus(last); }
+    else if (t.dataset.removeYes) {
+      t.disabled = true;
+      await call("remove-folder", { accountKey: t.dataset.key, folderId: t.dataset.removeYes });
+      removing = "";
+      poll();
+    }
     else if (t.id === "btn-log") await call("log", {});
     else if (t.dataset.link) await call("open-link", { link: t.dataset.link });
     else if (t.id === "btn-check") await call("check-update", {});
@@ -289,3 +340,6 @@ document.addEventListener("click", async (ev) => {
 route();
 poll();
 setInterval(poll, 2000);
+
+// Choosing another lab on the preview screen re-checks whether that lab already covers it.
+document.addEventListener("change", (ev) => { if (ev.target && ev.target.id === "ws-pick") updateInsideNote(); });
