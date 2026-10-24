@@ -1,20 +1,28 @@
 "use strict";
-// Binaly Sync's local screens. Everything here talks only to this computer's Binaly Sync.
+// Binaly Sync's screens. This page runs inside Binaly Sync's own window and talks only to the
+// program, through the window (binalyCall, provided by the window). It can't reach the network.
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const fmt = (n) => Number(n || 0).toLocaleString();
 
-async function call(name, body) {
-  const opts = body === undefined ? {} : {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-binaly-sync": "1" },
-    body: JSON.stringify(body),
-  };
-  const res = await fetch("api/" + name, opts);
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || "HTTP " + res.status);
-  return json;
+const pending = new Map();
+let seq = 0;
+window._binalyDone = (id, ok, value) => {
+  const p = pending.get(id);
+  if (!p) return;
+  pending.delete(id);
+  if (ok) p.resolve(value); else p.reject(new Error(value));
+};
+function call(name, body) {
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    pending.set(id, { resolve, reject });
+    window.binalyCall(id, name, JSON.stringify(body ?? null)).catch((e) => {
+      pending.delete(id);
+      reject(new Error(String(e)));
+    });
+  });
 }
 
 function human(b) {
@@ -55,7 +63,8 @@ let last = null;
 function renderStatus(s) {
   last = s;
   const st = s.status || {};
-  $("activity").textContent = s.pausedUntil ? `Paused until ${new Date(s.pausedUntil).toLocaleString()}` : (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
+  const signedIn = (s.accounts || []).length > 0;
+  $("activity").textContent = !signedIn ? "" : s.pausedUntil ? `Paused until ${new Date(s.pausedUntil).toLocaleString()}` : (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
   $("btn-pause").textContent = s.pausedUntil ? "Resume" : "Pause";
   $("btn-sync").disabled = !!st.running;
   const wss = st.workspaces && st.workspaces.length ? st.workspaces : (s.accounts || []).map((a) => ({ key: a.key, name: a.workspaceName, email: a.email, state: "ok" }));
@@ -147,23 +156,33 @@ async function loadSettings() {
 
 // ---- routing ----
 function route() {
-  const [screen, query] = (location.hash.slice(1) || "status").split("?");
+  const [screen, query] = (current || "status").split("?");
   for (const v of ["status", "preview", "settings"]) $("view-" + v).hidden = v !== screen;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === screen));
   if (screen === "preview") showPreview(new URLSearchParams(query).get("folder") || "");
   if (screen === "settings") loadSettings();
 }
-window.addEventListener("hashchange", route);
+// Screens are "status", "settings" or "preview?folder=...". The program opens one with
+// binalyShow, e.g. after the tray's "Add folder...".
+let current = window.binalyStartScreen || "status";
+function go(screen) { current = screen; route(); }
+window.binalyShow = go;
+// This page has no address to reload; keep F5 and Ctrl+R from blanking the window.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "F5" || ((ev.ctrlKey || ev.metaKey) && (ev.key === "r" || ev.key === "R"))) ev.preventDefault();
+});
 
 async function pickAndPreview() {
   try {
     const { folder } = await call("pick", {});
-    if (folder) location.hash = "preview?folder=" + encodeURIComponent(folder);
+    if (folder) go("preview?folder=" + encodeURIComponent(folder));
   } catch (e) { alertBox(e.message); }
 }
 function alertBox(msg) { $("activity").textContent = msg; }
 
 document.addEventListener("click", async (ev) => {
+  const nav = ev.target.closest("[data-nav]");
+  if (nav) { go(nav.dataset.nav); return; }
   const t = ev.target.closest("button");
   if (!t) return;
   try {
@@ -173,7 +192,7 @@ document.addEventListener("click", async (ev) => {
     else if (t.id === "btn-start") {
       t.disabled = true;
       await call("start", { folder: previewFolder, accountKey: $("ws-pick").value });
-      location.hash = "status";
+      go("status");
     }
     else if (t.id === "btn-signin" || t.id === "btn-signin-empty" || t.hasAttribute("data-signin")) { await call("signin", {}); poll(); }
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }

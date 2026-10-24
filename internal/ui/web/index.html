@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>Binaly Sync</title>
-<link rel="icon" href="icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
   <div class="brand"><img src="icon.png" alt="" width="28" height="28"><span>Binaly Sync</span></div>
   <nav>
-    <a href="#status" data-nav="status">Status</a>
-    <a href="#settings" data-nav="settings">Settings</a>
+    <a data-nav="status">Status</a>
+    <a data-nav="settings">Settings</a>
   </nav>
 </header>
 <main>

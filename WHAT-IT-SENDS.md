@@ -12,8 +12,12 @@ provider directly.
 To check for updates, it also downloads this repository's latest release information from
 `github.com` (and GitHub's download hosts under `githubusercontent.com`) every few hours,
 and the new version when there is one. Those requests send nothing about the lab, its files
-or its users. It accepts no incoming connections from other computers: its status pages
-are served on `127.0.0.1` only, behind a random key.
+or its users.
+
+It opens no network ports. Its window is a Windows WebView2 window that talks to the program
+directly and can't load anything from the internet. The one exception is signing in: while
+you sign in (10 minutes at most), it listens on `127.0.0.1` (this computer only) so the browser can hand
+back the sign-in, the standard method for desktop apps (RFC 8252).
 
 ## What it reads
 

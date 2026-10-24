@@ -50,10 +50,10 @@ func trayIcons() (normal, attention, paused []byte) {
 	return iconNormal, iconAttention, iconPaused
 }
 
-// trayApp is the running tray app, and the backend its local pages call.
+// trayApp is the running tray app, and the backend its window calls.
 type trayApp struct {
 	e       *engine.Engine
-	srv     *ui.Server
+	win     *ui.Window
 	trigger chan engine.Options
 	ctx     context.Context
 
@@ -72,10 +72,8 @@ func runTray() {
 		e, done, err = open()
 	}
 	if err != nil {
-		// Already running: show that instance's status page instead of starting another.
-		if raw, rerr := os.ReadFile(filepath.Join(config.Dir(), "ui.url")); rerr == nil {
-			_ = openBrowser(strings.TrimSpace(string(raw)) + "#status")
-		}
+		// Already running: bring that one's window forward instead of starting another.
+		signalShow()
 		return
 	}
 	defer done()
@@ -100,12 +98,8 @@ func runTray() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan struct{}, 1), ctx: ctx, interval: 15 * time.Minute}
-	srv, err := ui.Start(app)
-	if err != nil {
-		return
-	}
-	app.srv = srv
-	_ = os.WriteFile(filepath.Join(config.Dir(), "ui.url"), []byte(srv.Base), 0o600)
+	app.win = &ui.Window{B: app, DataPath: filepath.Join(config.Dir(), "webview"), OnError: app.windowError}
+	_ = os.Remove(filepath.Join(config.Dir(), "ui.url")) // from versions that served the screens on a local port
 	systray.Run(app.onReady, func() { cancel() })
 }
 
@@ -136,6 +130,7 @@ func (a *trayApp) onReady() {
 	go a.scheduler()
 	go a.refreshTray()
 	go a.updater(mUpdate)
+	go listenShow(a.ctx, func() { a.win.Show("status") })
 
 	// First run: sign in, then choose a folder and preview it.
 	if len(a.e.Cfg.Accounts()) == 0 {
@@ -143,7 +138,7 @@ func (a *trayApp) onReady() {
 			if err := a.SignIn(); err == nil {
 				a.addFolderFlow()
 			} else {
-				_ = openBrowser(a.srv.URL("status"))
+				a.win.Show("status")
 			}
 		}()
 	}
@@ -155,7 +150,7 @@ func (a *trayApp) onReady() {
 				mUpdate.Hide()
 				a.InstallUpdate()
 			case <-mStatus.ClickedCh:
-				_ = openBrowser(a.srv.URL("status"))
+				a.win.Show("status")
 			case <-mSync.ClickedCh:
 				a.SyncNow()
 			case <-mPause1.ClickedCh:
@@ -175,9 +170,9 @@ func (a *trayApp) onReady() {
 			case <-mAddWS.ClickedCh:
 				go func() { _ = a.SignIn() }()
 			case <-mWorkspaces.ClickedCh:
-				_ = openBrowser(a.srv.URL("settings"))
+				a.win.Show("settings")
 			case <-mSettings.ClickedCh:
-				_ = openBrowser(a.srv.URL("settings"))
+				a.win.Show("settings")
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -272,12 +267,23 @@ func (a *trayApp) addFolderFlow() {
 	if err != nil || folder == "" {
 		return
 	}
-	_ = openBrowser(a.srv.URL("preview?folder=" + urlEscape(folder)))
+	a.win.Show("preview?folder=" + urlEscape(folder))
 }
 
 func urlEscape(s string) string {
 	r := strings.NewReplacer("%", "%25", " ", "%20", "#", "%23", "&", "%26", "?", "%3F", "+", "%2B")
 	return r.Replace(s)
+}
+
+// windowError explains a window that can't open, and offers the fix.
+func (a *trayApp) windowError(err error) {
+	if errors.Is(err, ui.ErrNoWebView) {
+		if dialog.Message("%s.\n\nOpen Microsoft's download page for it?", err.Error()).Title("Binaly Sync").YesNo() {
+			_ = openBrowser("https://developer.microsoft.com/microsoft-edge/webview2/")
+		}
+		return
+	}
+	dialog.Message("%s", err.Error()).Title("Binaly Sync").Error()
 }
 
 func (a *trayApp) openInBinaly() {

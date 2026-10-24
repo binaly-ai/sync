@@ -64,7 +64,7 @@ func cmdUninstall(args []string) error {
 	if len(dirs) > 0 {
 		c := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe"))
 		c.SysProcAttr = &syscall.SysProcAttr{
-			CmdLine:       `/C ping -n 3 127.0.0.1 >NUL & ` + strings.Join(dirs, " & "),
+			CmdLine:       `/C ping -n 6 127.0.0.1 >NUL & ` + strings.Join(dirs, " & "),
 			HideWindow:    true,
 			CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS,
 		}
