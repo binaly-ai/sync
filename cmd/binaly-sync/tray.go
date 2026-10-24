@@ -33,7 +33,22 @@ var (
 	iconAttention []byte
 	//go:embed icons/paused.ico
 	iconPaused []byte
+	//go:embed icons/binaly-dark.ico
+	iconNormalDark []byte
+	//go:embed icons/attention-dark.ico
+	iconAttentionDark []byte
+	//go:embed icons/paused-dark.ico
+	iconPausedDark []byte
 )
+
+// trayIcons picks the artwork that shows up against the taskbar: the brand navy on a light
+// taskbar, the dark-theme artwork on a dark one.
+func trayIcons() (normal, attention, paused []byte) {
+	if taskbarDark() {
+		return iconNormalDark, iconAttentionDark, iconPausedDark
+	}
+	return iconNormal, iconAttention, iconPaused
+}
 
 // trayApp is the running tray app, and the backend its local pages call.
 type trayApp struct {
@@ -42,12 +57,20 @@ type trayApp struct {
 	trigger chan engine.Options
 	ctx     context.Context
 
+	updateNow chan struct{}
+
 	mu       sync.Mutex
 	interval time.Duration
+	update   updateStatus
 }
 
 func runTray() {
 	e, done, err := open()
+	// Just updated: the previous version may still be closing the state file.
+	for i := 0; err != nil && os.Getenv(restartEnv) != "" && i < 15; i++ {
+		time.Sleep(2 * time.Second)
+		e, done, err = open()
+	}
 	if err != nil {
 		// Already running: show that instance's status page instead of starting another.
 		if raw, rerr := os.ReadFile(filepath.Join(config.Dir(), "ui.url")); rerr == nil {
@@ -69,10 +92,14 @@ func runTray() {
 	} else {
 		_ = install.SetStartAtLogon(e.Cfg.Settings().StartAtLogon, install.Target())
 	}
+	if install.IsInstalled() {
+		install.Cleanup()
+		_ = install.Register(Version)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), ctx: ctx, interval: 15 * time.Minute}
+	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan struct{}, 1), ctx: ctx, interval: 15 * time.Minute}
 	srv, err := ui.Start(app)
 	if err != nil {
 		return
@@ -83,10 +110,13 @@ func runTray() {
 }
 
 func (a *trayApp) onReady() {
-	systray.SetIcon(iconNormal)
+	normal, _, _ := trayIcons()
+	systray.SetIcon(normal)
 	systray.SetTitle("Binaly Sync")
 	systray.SetTooltip("Binaly Sync")
 
+	mUpdate := systray.AddMenuItem("Install update", "A newer version of Binaly Sync is available")
+	mUpdate.Hide()
 	mStatus := systray.AddMenuItem("Open Binaly Sync", "Progress and folders")
 	mSync := systray.AddMenuItem("Sync now", "")
 	mPause := systray.AddMenuItem("Pause", "")
@@ -105,6 +135,7 @@ func (a *trayApp) onReady() {
 
 	go a.scheduler()
 	go a.refreshTray()
+	go a.updater(mUpdate)
 
 	// First run: sign in, then choose a folder and preview it.
 	if len(a.e.Cfg.Accounts()) == 0 {
@@ -120,6 +151,9 @@ func (a *trayApp) onReady() {
 	go func() {
 		for {
 			select {
+			case <-mUpdate.ClickedCh:
+				mUpdate.Hide()
+				a.InstallUpdate()
 			case <-mStatus.ClickedCh:
 				_ = openBrowser(a.srv.URL("status"))
 			case <-mSync.ClickedCh:
@@ -180,8 +214,10 @@ func (a *trayApp) scheduler() {
 
 // refreshTray keeps the icon and tooltip in step with the engine.
 func (a *trayApp) refreshTray() {
+	var lastIcon []byte
 	for {
 		s := a.e.Snapshot()
+		iconNormal, iconAttention, iconPaused := trayIcons()
 		icon, tip := iconNormal, "Binaly Sync: up to date"
 		var p api.Progress
 		attention := false
@@ -207,7 +243,10 @@ func (a *trayApp) refreshTray() {
 		case s.Running:
 			tip = "Binaly Sync: " + s.Activity
 		}
-		systray.SetIcon(icon)
+		if len(icon) != len(lastIcon) || &icon[0] != &lastIcon[0] {
+			systray.SetIcon(icon)
+			lastIcon = icon
+		}
 		if len(tip) > 120 {
 			tip = tip[:120]
 		}
@@ -269,7 +308,10 @@ func (a *trayApp) Status() any {
 	for _, x := range a.e.Cfg.Accounts() {
 		accts = append(accts, accountView{Key: x.Key(), WorkspaceName: x.WorkspaceName, Email: x.Email})
 	}
-	return map[string]any{"status": a.e.Snapshot(), "accounts": accts, "pausedUntil": a.pausedUntil(), "version": Version}
+	a.mu.Lock()
+	upd := a.update
+	a.mu.Unlock()
+	return map[string]any{"status": a.e.Snapshot(), "accounts": accts, "pausedUntil": a.pausedUntil(), "version": Version, "update": upd}
 }
 
 // previewView adds the limit the page shows.

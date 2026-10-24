@@ -1,0 +1,55 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds, signs and publishes a release. Nothing is built or signed
+# on a developer's machine.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the release
+  # id-token: write   # for Azure Artifact Signing (OIDC), once enabled below
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: Build
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME}"
+          n="${v#v}"; n="${n%%-*}"
+          cd cmd/binaly-sync
+          go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64 --file-version "$n.0" --product-version "$n.0"
+          cd ../..
+          flags="-H windowsgui -s -w -X main.Version=$v"
+          GOARCH=amd64 go build -trimpath -ldflags "$flags" -o dist/binaly-sync.exe ./cmd/binaly-sync
+          GOARCH=arm64 go build -trimpath -ldflags "$flags" -o dist/binaly-sync-arm64.exe ./cmd/binaly-sync
+
+      # Authenticode signing with Azure Artifact Signing goes here, before the manifest is
+      # made, once Microsoft has validated Binaly Management Ltd. It authenticates through
+      # GitHub's OIDC token (id-token: write above), so it needs no stored secret.
+
+      - name: Sign the update manifest
+        shell: bash
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: go run ./tools/release -dir dist -version "${GITHUB_REF_NAME}"
+
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${GITHUB_REF_NAME}"
+          pre=""
+          case "$v" in *-*) pre="--prerelease" ;; esac
+          gh release create "$v" dist/* $pre --title "Binaly Sync $v" --generate-notes

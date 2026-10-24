@@ -1,0 +1,169 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"time"
+
+	"fyne.io/systray"
+
+	"github.com/binaly-ai/sync/internal/install"
+	"github.com/binaly-ai/sync/internal/update"
+)
+
+// restartEnv marks a start that follows an update: the old process may still be letting go of
+// the state file, so the new one waits for it instead of giving up.
+const restartEnv = "BINALY_SYNC_RESTART"
+
+func checker() *update.Checker {
+	c := update.New()
+	// For testing an update end to end against a local copy of a release.
+	if b := os.Getenv("BINALY_SYNC_UPDATE_BASE"); b != "" {
+		c.Base = b
+	}
+	return c
+}
+
+// updateStatus is what the status page shows about updates.
+type updateStatus struct {
+	Available  string `json:"available,omitempty"`
+	Installing bool   `json:"installing,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// updater checks for a release a couple of minutes after start, then every 6 hours. With
+// automatic updates on, it installs one when no sync is running and restarts; otherwise it
+// offers it in the tray menu and on the status page.
+func (a *trayApp) updater(menu *systray.MenuItem) {
+	if Version == "dev" || !install.IsInstalled() {
+		return
+	}
+	c := checker()
+	next := time.After(2 * time.Minute)
+	for {
+		force := false
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-next:
+		case <-a.updateNow:
+			force = true
+		}
+		next = time.After(6 * time.Hour)
+		r, err := c.Latest(a.ctx, Version, runtime.GOARCH)
+		a.setUpdate(func(u *updateStatus) {
+			u.Available, u.Error = "", errText(err)
+			if r != nil {
+				u.Available = r.Version
+			}
+		})
+		if r == nil {
+			continue
+		}
+		if !force && a.e.Cfg.Settings().Updates != "auto" {
+			menu.SetTitle("Install update " + r.Version)
+			menu.Show()
+			continue
+		}
+		if err := a.applyUpdate(c, r); err != nil {
+			a.setUpdate(func(u *updateStatus) { u.Installing, u.Error = false, err.Error() })
+		}
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "Couldn't check for updates: " + err.Error()
+}
+
+func (a *trayApp) setUpdate(f func(*updateStatus)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f(&a.update)
+}
+
+// InstallUpdate is the "Install update" button and menu item.
+func (a *trayApp) InstallUpdate() {
+	select {
+	case a.updateNow <- struct{}{}:
+	default:
+	}
+}
+
+// applyUpdate downloads and verifies a release, waits for any running sync to finish, swaps
+// the executable and restarts into it. On success it doesn't return: the app quits.
+func (a *trayApp) applyUpdate(c *update.Checker, r *update.Release) error {
+	a.setUpdate(func(u *updateStatus) { u.Installing = true })
+	dl := install.Target() + ".update"
+	if err := c.Download(a.ctx, r, dl); err != nil {
+		return fmt.Errorf("couldn't download %s: %w", r.Version, err)
+	}
+	for a.e.Snapshot().Running {
+		select {
+		case <-a.ctx.Done():
+			os.Remove(dl)
+			return a.ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	if err := restartInto(dl); err != nil {
+		return err
+	}
+	systray.Quit()
+	return nil
+}
+
+// restartInto swaps in a verified executable and starts it. If it won't start, the previous
+// executable goes back.
+func restartInto(newExe string) error {
+	if err := install.Swap(newExe); err != nil {
+		os.Remove(newExe)
+		return fmt.Errorf("couldn't replace the program: %w", err)
+	}
+	cmd := exec.Command(install.Target())
+	cmd.Env = append(os.Environ(), restartEnv+"=1")
+	if err := cmd.Start(); err != nil {
+		_ = os.Rename(install.Target(), newExe)
+		_ = os.Rename(install.Target()+".old", install.Target())
+		os.Remove(newExe)
+		return fmt.Errorf("the new version wouldn't start, so the previous one was kept: %w", err)
+	}
+	return nil
+}
+
+// cmdUpdate installs a newer release now, for IT staff and support. If the tray app is
+// running, it's restarted on the new version.
+func cmdUpdate(ctx context.Context) error {
+	if Version == "dev" {
+		return errors.New("this is a development build; it doesn't update itself")
+	}
+	if _, err := os.Stat(install.Target()); err != nil {
+		return errors.New("Binaly Sync isn't installed on this computer; run the downloaded binaly-sync.exe first")
+	}
+	c := checker()
+	r, err := c.Latest(ctx, Version, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	if r == nil {
+		fmt.Println("Binaly Sync", Version, "is the latest version.")
+		return nil
+	}
+	fmt.Printf("Downloading %s...\n", r.Version)
+	dl := install.Target() + ".update"
+	if err := c.Download(ctx, r, dl); err != nil {
+		return err
+	}
+	stopOthers()
+	if err := restartInto(dl); err != nil {
+		return err
+	}
+	fmt.Printf("Updated to %s; Binaly Sync is running in the tray.\n", r.Version)
+	return nil
+}

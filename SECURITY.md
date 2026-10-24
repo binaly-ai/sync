@@ -8,9 +8,16 @@ for this repository, or email security@binaly.ai. We'll acknowledge within three
 
 ## How releases are made
 
-Releases are built by this repository's GitHub Actions release workflow from a tagged commit.
-Each release publishes `checksums.txt` and its signature; Binaly Sync verifies that signature
-before installing an update. Nothing is built or signed on a developer's machine.
+Releases are built by this repository's GitHub Actions release workflow
+(`.github/workflows/release.yml`) from a tagged commit. Nothing is built or signed on a
+developer's machine.
+
+Each release publishes `release.json`, which names the version and the SHA-256 of each
+executable, and `release.json.sig`, an ed25519 signature over it. Binaly Sync installs an
+update only if the signature verifies against the public key in `internal/update/update.go`,
+the version is newer than the one running, and the downloaded file's hash matches. The signing
+key is a secret of this repository's GitHub Actions. `checksums.txt` lists the same hashes for
+people checking a download by hand.
 
 ## Secrets
 

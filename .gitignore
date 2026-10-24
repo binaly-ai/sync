@@ -37,3 +37,6 @@ go.work.sum
 /binaly-sync.exe
 /dist/
 *.db
+
+# Windows resources (icon, version info), made by go generate
+*.syso

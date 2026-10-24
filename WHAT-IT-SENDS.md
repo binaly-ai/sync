@@ -5,9 +5,14 @@ this repository.
 
 ## Where it connects
 
-Only to the Binaly server it's signed in to, over HTTPS (port 443). The default is
+To the Binaly server it's signed in to, over HTTPS (port 443). The default is
 `mcp.binaly.ai`. File uploads go to the same address; Binaly Sync never connects to a storage
-provider directly. It accepts no incoming connections from other computers: its status pages
+provider directly.
+
+To check for updates, it also downloads this repository's latest release information from
+`github.com` (and GitHub's download hosts under `githubusercontent.com`) every few hours,
+and the new version when there is one. Those requests send nothing about the lab, its files
+or its users. It accepts no incoming connections from other computers: its status pages
 are served on `127.0.0.1` only, behind a random key.
 
 ## What it reads

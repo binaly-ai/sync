@@ -17,9 +17,16 @@ its own and contains no AI. For each file it reports a name, a size, a date and 
 ## Install (Windows)
 
 Once released: download `binaly-sync.exe` from the [latest release](https://github.com/binaly-ai/sync/releases/latest)
-and run it. It installs itself for your Windows user only (no administrator rights), opens your
-browser to sign in to Binaly, and asks which folders to sync. Before anything is sent, it shows
-you what it found.
+and run it (`binaly-sync-arm64.exe` for ARM computers). It installs itself for your Windows user
+only (no administrator rights), adds itself to the Start menu, opens your browser to sign in to
+Binaly, and asks which folders to sync. Before anything is sent, it shows you what it found.
+
+It keeps itself up to date: it checks this repository's releases every few hours and installs a
+new version when no sync is running. Settings can switch that to "tell me, don't install".
+
+To remove it: Windows Settings, Apps, Installed apps, Binaly Sync, Uninstall. That removes the
+program, its start-at-logon entry, its sign-ins and its local files. Files already sent to
+Binaly stay there.
 
 ## Using it
 
@@ -35,6 +42,8 @@ binaly-sync add <folder>          sync a folder from this computer
 binaly-sync sync                  run one sync now
 binaly-sync status                progress per workspace and folder
 binaly-sync log                   where the latest run log is
+binaly-sync update                install a newer release now
+binaly-sync uninstall [--quiet]   remove it from this computer
 ```
 
 ## Building from source
@@ -42,9 +51,12 @@ binaly-sync log                   where the latest run log is
 Go 1.27 or later:
 
 ```
+go generate ./cmd/binaly-sync     the icon and version information (optional)
 go build -ldflags "-H windowsgui" -o binaly-sync.exe ./cmd/binaly-sync
 go test ./...
 ```
+
+A build from source reports its version as `dev` and never updates itself.
 
 ## License
 

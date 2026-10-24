@@ -35,6 +35,7 @@ type Backend interface {
 	PickFolder() (string, error)
 	ConfirmDeletions(accountKey string)
 	OpenLog()
+	InstallUpdate()
 }
 
 // Server is the running local page server.
@@ -134,6 +135,9 @@ func api(w http.ResponseWriter, r *http.Request, b Backend, name string) {
 		out = map[string]bool{"ok": err == nil}
 	case "confirm-deletions":
 		b.ConfirmDeletions(in.AccountKey)
+		out = map[string]bool{"ok": true}
+	case "update":
+		b.InstallUpdate()
 		out = map[string]bool{"ok": true}
 	case "log":
 		b.OpenLog()

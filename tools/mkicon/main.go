@@ -1,8 +1,14 @@
-// mkicon builds the tray icons from the Binaly icon PNG: a plain one, one with an ochre dot
-// (needs attention) and one with a grey dot (paused), each as a Windows .ico holding 16, 24,
-// 32 and 48 pixel images (PNG-compressed, which Windows has read since Vista).
+// mkicon builds the icons from the Binaly icon PNGs (G:/My Drive/Projects/Lab/Assets):
 //
-//	go run ./tools/mkicon <binaly-icon-512.png> cmd/binaly-sync/icons
+//   - tray icons: a plain one, one with an ochre dot (needs attention) and one with a grey dot
+//     (paused), each as a Windows .ico holding 16, 24, 32 and 48 pixel images. The light-theme
+//     artwork (navy) is for a light taskbar; the dark-theme artwork for a dark one, the
+//     Windows 11 default, where navy would all but disappear.
+//   - app.ico, the program's own icon (Explorer, Start menu, Installed apps), up to 256 pixels.
+//
+// Images are PNG-compressed inside the .ico, which Windows has read since Vista.
+//
+//	go run ./tools/mkicon <binaly-icon-512.png> <binaly-icon-512-dark-theme.png> cmd/binaly-sync/icons
 package main
 
 import (
@@ -19,7 +25,8 @@ import (
 var (
 	ochre = color.NRGBA{0xC1, 0x8B, 0x2F, 0xFF} // ochre-500
 	grey  = color.NRGBA{0x9D, 0x90, 0x72, 0xFF} // paper-500
-	paper = color.NRGBA{0xF4, 0xF2, 0xEB, 0xFF} // paper-50, the dot's outline
+	paper = color.NRGBA{0xF4, 0xF2, 0xEB, 0xFF} // paper-50, the dot's outline on a light taskbar
+	night = color.NRGBA{0x20, 0x20, 0x20, 0xFF} // the dark taskbar, the dot's outline there
 )
 
 // scale is an area-average downscale: good enough for an icon, no dependency.
@@ -53,7 +60,7 @@ func scale(src image.Image, size int) *image.NRGBA {
 }
 
 // dot draws a status dot in the bottom-right corner, with a paper-coloured ring.
-func dot(img *image.NRGBA, c color.NRGBA) {
+func dot(img *image.NRGBA, c, ring color.NRGBA) {
 	s := img.Bounds().Dx()
 	rad := float64(s) * 0.22
 	cx, cy := float64(s)-rad-0.5, float64(s)-rad-0.5
@@ -65,7 +72,7 @@ func dot(img *image.NRGBA, c color.NRGBA) {
 			case d2 <= (rad-1.2)*(rad-1.2):
 				img.SetNRGBA(x, y, c)
 			case d2 <= rad*rad:
-				img.SetNRGBA(x, y, paper)
+				img.SetNRGBA(x, y, ring)
 			}
 		}
 	}
@@ -102,39 +109,63 @@ func writeICO(path string, imgs []*image.NRGBA) error {
 	return os.WriteFile(path, out.Bytes(), 0o644)
 }
 
+func load(path string) image.Image {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		panic(err)
+	}
+	return img
+}
+
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Println("usage: mkicon <icon.png> <outdir>")
+	if len(os.Args) != 4 {
+		fmt.Println("usage: mkicon <icon.png> <icon-dark-theme.png> <outdir>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
-	src, err := png.Decode(f)
-	f.Close()
-	if err != nil {
-		panic(err)
-	}
+	light, dark, out := load(os.Args[1]), load(os.Args[2]), os.Args[3]
+	os.MkdirAll(out, 0o755)
 	sizes := []int{16, 24, 32, 48}
-	variants := map[string]*color.NRGBA{"binaly.ico": nil, "attention.ico": &ochre, "paused.ico": &grey}
-	os.MkdirAll(os.Args[2], 0o755)
-	for name, c := range variants {
-		var imgs []*image.NRGBA
-		for _, s := range sizes {
-			im := scale(src, s)
-			if c != nil {
-				dot(im, *c)
+	themes := []struct {
+		suffix string
+		src    image.Image
+		ring   color.NRGBA
+	}{{"", light, paper}, {"-dark", dark, night}}
+	for _, th := range themes {
+		for _, v := range []struct {
+			name string
+			c    *color.NRGBA
+		}{{"binaly", nil}, {"attention", &ochre}, {"paused", &grey}} {
+			var imgs []*image.NRGBA
+			for _, s := range sizes {
+				im := scale(th.src, s)
+				if v.c != nil {
+					dot(im, *v.c, th.ring)
+				}
+				imgs = append(imgs, im)
 			}
-			imgs = append(imgs, im)
+			name := v.name + th.suffix + ".ico"
+			if err := writeICO(filepath.Join(out, name), imgs); err != nil {
+				panic(err)
+			}
+			fmt.Println("wrote", name)
 		}
-		if err := writeICO(filepath.Join(os.Args[2], name), imgs); err != nil {
-			panic(err)
-		}
-		fmt.Println("wrote", name)
 	}
+	// The program's icon: the brand (light-theme) artwork, like the website and the app.
+	var app []*image.NRGBA
+	for _, s := range []int{16, 20, 24, 32, 40, 48, 64, 256} {
+		app = append(app, scale(light, s))
+	}
+	if err := writeICO(filepath.Join(out, "app.ico"), app); err != nil {
+		panic(err)
+	}
+	fmt.Println("wrote app.ico")
 	// A 64px PNG for the local pages' favicon.
 	var buf bytes.Buffer
-	png.Encode(&buf, scale(src, 64))
-	os.WriteFile(filepath.Join(os.Args[2], "binaly-64.png"), buf.Bytes(), 0o644)
+	png.Encode(&buf, scale(light, 64))
+	os.WriteFile(filepath.Join(out, "binaly-64.png"), buf.Bytes(), 0o644)
 }

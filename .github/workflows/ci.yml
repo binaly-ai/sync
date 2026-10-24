@@ -18,6 +18,7 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./...
+      - run: go generate ./cmd/binaly-sync
       - run: go build -ldflags "-H windowsgui" -o binaly-sync.exe ./cmd/binaly-sync
 
   cross-build:

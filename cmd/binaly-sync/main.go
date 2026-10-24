@@ -2,6 +2,10 @@
 // app; with a command it does that one thing and exits (for IT staff, support and scripts).
 package main
 
+// The program's icon and version information, from winres/winres.json. The release workflow
+// passes the version; a plain go build without this step just has no icon.
+//go:generate go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64
+
 import (
 	"context"
 	"errors"
@@ -42,6 +46,8 @@ Run with no command to start the tray app. Commands:
   sync [--workspace W] [--force]     run one sync now, in the foreground
   status                             progress per workspace and folder
   log                                where the latest run log is
+  update                             install a newer release now, if there is one
+  uninstall [--quiet]                remove Binaly Sync and its sign-ins from this computer
   version
 `
 
@@ -74,6 +80,10 @@ func main() {
 		err = cmdStatus(ctx)
 	case "log":
 		err = cmdLog()
+	case "update":
+		err = cmdUpdate(ctx)
+	case "uninstall":
+		err = cmdUninstall(args)
 	case "version", "--version", "-v":
 		fmt.Println("binaly-sync", Version)
 	case "help", "--help", "-h":
