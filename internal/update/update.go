@@ -73,6 +73,8 @@ func (c *Checker) get(ctx context.Context, url string, limit int64) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	// Right after a release, a cache can still answer with the previous one for a moment.
+	req.Header.Set("Cache-Control", "no-cache")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err

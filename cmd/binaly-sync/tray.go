@@ -98,6 +98,12 @@ func runTray() {
 	if install.IsInstalled() {
 		install.Cleanup()
 		_ = install.Register(Version)
+		// Right after an update the previous version may still be closing, holding its file;
+		// try again once it has surely gone.
+		go func() {
+			time.Sleep(30 * time.Second)
+			install.Cleanup()
+		}()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
