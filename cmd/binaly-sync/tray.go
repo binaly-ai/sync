@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,10 @@ type trayApp struct {
 	ctx     context.Context
 
 	updateNow chan updateRequest
+
+	// "Open in Binaly": one item with one lab, a submenu with one entry per lab otherwise.
+	mOpen, mOpenIn *systray.MenuItem
+	openItems      map[string]*systray.MenuItem // account key -> submenu entry
 
 	mu       sync.Mutex
 	interval time.Duration
@@ -118,7 +123,11 @@ func (a *trayApp) onReady() {
 	mPauseDay := mPause.AddSubMenuItem("Until tomorrow", "")
 	mResume := mPause.AddSubMenuItem("Resume", "")
 	mAdd := systray.AddMenuItem("Add folder...", "")
-	mOpen := systray.AddMenuItem("Open in Binaly", "The ingest view in the app")
+	a.mOpen = systray.AddMenuItem("Open in Binaly", "Your lab in the Binaly app")
+	a.mOpenIn = systray.AddMenuItem("Open in Binaly", "Choose a lab")
+	a.mOpenIn.Hide()
+	a.openItems = map[string]*systray.MenuItem{}
+	a.refreshOpenMenu()
 	systray.AddSeparator()
 	mLog := systray.AddMenuItem("Show log", "")
 	mWorkspaces := systray.AddMenuItem("Workspaces", "")
@@ -166,8 +175,10 @@ func (a *trayApp) onReady() {
 				a.Resume()
 			case <-mAdd.ClickedCh:
 				go a.addFolderFlow()
-			case <-mOpen.ClickedCh:
-				a.openInBinaly()
+			case <-a.mOpen.ClickedCh:
+				if accts := a.e.Cfg.Accounts(); len(accts) > 0 {
+					a.openInBinaly(accts[0])
+				}
 			case <-mLog.ClickedCh:
 				a.OpenLog()
 			case <-mAddWS.ClickedCh:
@@ -217,6 +228,7 @@ func (a *trayApp) refreshTray() {
 	var lastIcon []byte
 	for {
 		s := a.e.Snapshot()
+		a.refreshOpenMenu()
 		iconNormal, iconAttention, iconPaused := trayIcons()
 		icon, tip := iconNormal, "Binaly Sync: up to date"
 		var p api.Progress
@@ -291,10 +303,48 @@ func (a *trayApp) windowError(err error) {
 	dialog.Message("%s", err.Error()).Title("Binaly Sync").Error()
 }
 
-func (a *trayApp) openInBinaly() {
-	for _, acct := range a.e.Cfg.Accounts() {
-		_ = openBrowser(appURL(acct.Server))
+// openInBinaly opens one lab in the web app. The lab is named in the address, so someone in
+// two labs lands in the right one, even when they first have to sign in to the app.
+func (a *trayApp) openInBinaly(acct config.Account) {
+	_ = openBrowser(appURL(acct.Server) + "/?group_id=" + url.QueryEscape(acct.WorkspaceID))
+}
+
+// refreshOpenMenu keeps "Open in Binaly" in step with the signed-in labs: a plain item for one,
+// a submenu naming each lab for several. Labs can be added or signed out while the app runs.
+func (a *trayApp) refreshOpenMenu() {
+	accts := a.e.Cfg.Accounts()
+	if len(accts) < 2 {
+		a.mOpenIn.Hide()
+		a.mOpen.Show()
 		return
+	}
+	a.mOpen.Hide()
+	a.mOpenIn.Show()
+	live := map[string]bool{}
+	for _, acct := range accts {
+		key := acct.Key()
+		live[key] = true
+		if item, ok := a.openItems[key]; ok {
+			item.SetTitle(acct.WorkspaceName)
+			item.Show()
+			continue
+		}
+		item := a.mOpenIn.AddSubMenuItem(acct.WorkspaceName, acct.Email)
+		a.openItems[key] = item
+		go func(key string) {
+			for range item.ClickedCh {
+				for _, x := range a.e.Cfg.Accounts() {
+					if x.Key() == key {
+						a.openInBinaly(x)
+					}
+				}
+			}
+		}(key)
+	}
+	for key, item := range a.openItems {
+		if !live[key] {
+			item.Hide()
+		}
 	}
 }
 
