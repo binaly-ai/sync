@@ -121,6 +121,7 @@ input[type=number] { width: 110px; }
 }
 .note-box .actions { margin-top: 8px; }
 .folder-actions { margin-top: 4px; }
+.note-box.stopping { display: flex; align-items: center; gap: 10px; }
 .update-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .err-text { color: var(--attention); }
 #update { display: flex; align-items: center; gap: 10px; }

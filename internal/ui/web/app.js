@@ -119,8 +119,11 @@ function processingNote(w) {
 }
 
 let last = null;
-// The folder whose "Stop syncing" is asking for confirmation, if any.
+// The folder whose "Stop syncing" is asking for confirmation, if any; the one being stopped
+// (waiting for the server); and the last stop's result, shown on the card.
 let removing = "";
+let stopping = "";
+let stopError = "";
 
 function renderStatus(s) {
   last = s;
@@ -146,7 +149,9 @@ function renderStatus(s) {
         <div class="path">${esc(f.path)}</div>
         ${bar(f, true)}${compactLegend(f)}
         ${f.warning ? `<div class="warning">${esc(f.warning.reason)}<div class="actions"><button data-confirm="${esc(w.key)}">These files really were removed</button></div></div>` : ""}
-        ${removing === f.id
+        ${stopping === f.id
+          ? `<div class="note-box stopping">${spinner}<span>Stopping syncing this folder...</span></div>`
+          : removing === f.id
           ? `<div class="note-box"><b>Stop syncing this folder from this computer?</b> Files already in Binaly, and the notes made from them, stay. ${parentOf(f, w.folders)
               ? `Its files stay synced as part of <span class="path-inline">${esc(parentOf(f, w.folders).path)}</span>, so nothing else changes.`
               : "New and changed files in this folder won't be sent from this computer. If another computer also syncs it, that computer keeps going."}
@@ -162,6 +167,7 @@ function renderStatus(s) {
       ${bar(w.progress)}${legend(w.progress)}
       ${processingNote(w)}
       ${warnings.map((x) => `<div class="warning">${esc(x)}</div>`).join("")}
+      ${stopError ? `<div class="warning">${esc(stopError)}</div>` : ""}
       ${folders ? `<div class="folders">${folders}</div>` : ""}
     </div>`;
   }).join("");
@@ -341,9 +347,16 @@ document.addEventListener("click", async (ev) => {
     else if (t.dataset.remove) { removing = t.dataset.remove; renderStatus(last); }
     else if (t.hasAttribute("data-remove-no")) { removing = ""; renderStatus(last); }
     else if (t.dataset.removeYes) {
-      t.disabled = true;
-      await call("remove-folder", { accountKey: t.dataset.key, folderId: t.dataset.removeYes });
+      stopping = t.dataset.removeYes;
       removing = "";
+      stopError = "";
+      renderStatus(last);
+      try {
+        await call("remove-folder", { accountKey: t.dataset.key, folderId: stopping });
+      } catch (e) {
+        stopError = `Couldn't stop syncing that folder: ${e.message}`;
+      }
+      stopping = "";
       poll();
     }
     else if (t.id === "btn-log") await call("log", {});

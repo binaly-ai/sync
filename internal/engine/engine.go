@@ -93,6 +93,26 @@ func (e *Engine) Snapshot() Status {
 	return s
 }
 
+// ForgetFolder drops a folder from the status right away, once the server has confirmed this
+// computer stopped syncing it, instead of leaving it listed until the next refresh.
+func (e *Engine) ForgetFolder(accountKey, folderID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.status.Workspaces {
+		w := &e.status.Workspaces[i]
+		if w.Key != accountKey {
+			continue
+		}
+		kept := make([]api.FolderProgress, 0, len(w.Folders))
+		for _, f := range w.Folders {
+			if f.ID != folderID {
+				kept = append(kept, f)
+			}
+		}
+		w.Folders = kept
+	}
+}
+
 func (e *Engine) setActivity(format string, a ...any) {
 	e.mu.Lock()
 	e.status.Activity = fmt.Sprintf(format, a...)

@@ -399,7 +399,8 @@ func (a *trayApp) RemoveFolder(accountKey, folderID string) error {
 			return err
 		}
 		_ = a.e.State.DropFolder(acct.Key(), folderID)
-		a.SyncNow() // refreshes the folder list and the bar
+		a.e.ForgetFolder(acct.Key(), folderID) // gone from the window now, not at the next refresh
+		a.SyncNow()                            // refreshes the bar
 		return nil
 	}
 	return errors.New("that workspace isn't signed in on this computer")
