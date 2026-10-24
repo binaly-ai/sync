@@ -36,6 +36,16 @@ type Backend interface {
 	CheckUpdate()
 	OpenSetup(accountKey string)
 	OpenInBinaly(accountKey string)
+	// OpenURL opens an address in the person's browser.
+	OpenURL(url string)
+}
+
+// Links are the only addresses the page can open: a name, never a URL from the page, so the
+// page can't send the browser anywhere else. (A plain link would navigate this window itself.)
+var Links = map[string]string{
+	"website": "https://binaly.ai",
+	"source":  "https://github.com/binaly-ai/sync",
+	"sends":   "https://github.com/binaly-ai/sync/blob/main/WHAT-IT-SENDS.md",
 }
 
 var ok = map[string]bool{"ok": true}
@@ -46,6 +56,7 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		Folder     string          `json:"folder"`
 		AccountKey string          `json:"accountKey"`
 		Minutes    int             `json:"minutes"`
+		Link       string          `json:"link"`
 		Settings   json.RawMessage `json:"settings"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -96,6 +107,12 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.CheckUpdate()
 	case "open-setup":
 		b.OpenSetup(in.AccountKey)
+	case "open-link":
+		u, known := Links[in.Link]
+		if !known {
+			return nil, errors.New("unknown link " + in.Link)
+		}
+		b.OpenURL(u)
 	case "open-binaly":
 		b.OpenInBinaly(in.AccountKey)
 	default:

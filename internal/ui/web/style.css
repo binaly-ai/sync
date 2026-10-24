@@ -89,9 +89,22 @@ input[type=number] { width: 110px; }
 }
 .bar.small { height: 8px; margin: 6px 0 4px; }
 .bar span { display: block; height: 100%; }
-.bar .processed { background: var(--processed); }
-.bar .synced { background: var(--synced); }
-.bar .attention { background: var(--attention); }
+.bar .processed, .stage.processed .sw { background: var(--processed); }
+.bar .waiting, .stage.waiting .sw { background: var(--synced); }
+.bar .toUpload, .stage.toUpload .sw {
+  /* Striped: found, but not in Binaly yet - not the same as nothing. */
+  background: repeating-linear-gradient(135deg, var(--synced) 0 3px, var(--remaining) 3px 7px);
+}
+.bar .attention, .stage.attention .sw { background: var(--attention); }
+.stages { display: grid; gap: 7px; margin-top: 10px; }
+.stage { display: grid; grid-template-columns: 12px 60px 1fr; gap: 10px; align-items: baseline; font-size: 13.5px; line-height: 1.45; }
+.stage .sw { width: 12px; height: 12px; border-radius: 2px; align-self: center; }
+.stage .n { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.stage.attention b { color: var(--attention); }
+.total { margin: 10px 0 0; font-size: 13.5px; }
+.about .links { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+.about .links button { color: var(--ochre-deep); text-decoration: underline; text-underline-offset: 3px; padding-left: 0; }
+.notproc, .counting { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
 .legend b { color: var(--ink); font-weight: 600; }
 .legend .warn { color: var(--attention); }

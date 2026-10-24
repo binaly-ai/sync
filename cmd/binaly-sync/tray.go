@@ -299,6 +299,9 @@ func (a *trayApp) OpenInBinaly(accountKey string) {
 	}
 }
 
+// OpenURL opens one of the About page's fixed links (ui.Links) in the browser.
+func (a *trayApp) OpenURL(u string) { _ = openBrowser(u) }
+
 // OpenSetup opens a lab's Binaly Sync page in the app at "Set up processing": the steps for the
 // scheduled task in Claude, kept in one place (the server) so the window can't drift from them.
 func (a *trayApp) OpenSetup(accountKey string) {

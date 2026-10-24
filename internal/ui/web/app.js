@@ -32,29 +32,73 @@ function human(b) {
   return b + " bytes";
 }
 
-// The bar: processed inside synced inside total, problems as their own segment at the end.
-function bar(p, small) {
-  if (!p || p.total === 0) return `<div class="bar${small ? " small" : ""}"></div>`;
-  const pct = (n) => (100 * n / p.total).toFixed(2) + "%";
-  const syncedOnly = Math.max(0, p.synced - p.processed - p.attention);
-  return `<div class="bar${small ? " small" : ""}" role="img" aria-label="${fmt(p.processed)} processed, ${fmt(p.synced)} synced, of ${fmt(p.total)} files">` +
-    `<span class="processed" style="width:${pct(p.processed)}"></span>` +
-    `<span class="synced" style="width:${pct(syncedOnly)}"></span>` +
-    `<span style="flex:1"></span>` +
-    `<span class="attention" style="width:${p.attention ? `max(4px, ${pct(p.attention)})` : "0"}"></span></div>`;
+// The stages a file moves through. Each file is in exactly one, so the bar's four parts sit
+// side by side and add up to the whole. Same words as the lab's Binaly Sync page in the app.
+const STAGES = [
+  { key: "processed", label: "Processed", explain: "The LLM has read these and written them into the lab's notes." },
+  { key: "waiting", label: "Waiting for LLM", explain: "In Binaly and ready for the LLM's next scheduled run." },
+  { key: "toUpload", label: "Waiting to upload", explain: "Found on this computer, still being sent to Binaly." },
+  { key: "attention", label: "Needs attention", explain: "The LLM couldn't finish these. The lab's Binaly Sync page in the app lists them and says why." },
+];
+
+// A server that predates the stage counts sends only total/synced/processed/attention.
+function stages(p) {
+  const toUpload = p.toUpload ?? Math.max(0, p.total - p.synced);
+  const waiting = p.waiting ?? Math.max(0, p.synced - p.processed - p.attention);
+  return { processed: p.processed, waiting, toUpload, attention: p.attention, waitingOnDrive: p.waitingOnDrive ?? 0 };
 }
 
+function bar(p, small) {
+  const cls = `bar${small ? " small" : ""}`;
+  if (!p || p.total === 0) return `<div class="${cls}"></div>`;
+  const s = stages(p);
+  const pct = (n) => (100 * n / p.total).toFixed(2) + "%";
+  const label = STAGES.map((x) => `${fmt(s[x.key])} ${x.label.toLowerCase()}`).join(", ");
+  return `<div class="${cls}" role="img" aria-label="${label}, of ${fmt(p.total)} files">` +
+    STAGES.map((x) => s[x.key] ? `<span class="${x.key}" style="width:${x.key === "attention" ? `max(4px, ${pct(s[x.key])})` : pct(s[x.key])}"></span>` : "").join("") +
+    `</div>`;
+}
+
+// What isn't counted in the total, said in full.
+function notProcessedLine(p) {
+  const parts = [];
+  if (p.notProcessed) parts.push(`${fmt(p.notProcessed)} ${p.notProcessed === 1 ? "is a file type" : "are file types"} Binaly doesn't read`);
+  if (p.notInScope) parts.push(`${fmt(p.notInScope)} ${p.notInScope === 1 ? "is" : "are"} outside the folders the lab chose to process`);
+  if (p.removed) parts.push(`${fmt(p.removed)} ${p.removed === 1 ? "was" : "were"} removed from the folder (notes made from them stay)`);
+  return parts.length ? `<p class="notproc">Not processed: ${parts.join("; ")}.</p>` : "";
+}
+
+// The full explanation under a lab's bar: every stage named, counted and explained.
 function legend(p) {
   if (!p) return "";
+  if (p.counting && p.total === 0) return `<p class="counting">Counting files: Binaly Sync is still looking through the folders for the first time.</p>`;
+  const s = stages(p);
+  const rows = STAGES.map((x) => {
+    const n = s[x.key];
+    if (x.key === "attention" && !n) return "";
+    let extra = "";
+    if (x.key === "waiting" && s.waitingOnDrive) extra = ` ${fmt(s.waitingOnDrive)} of them ${s.waitingOnDrive === 1 ? "is" : "are"} too large to upload; the LLM reads ${s.waitingOnDrive === 1 ? "it" : "those"} directly from the drive.`;
+    if (x.key === "toUpload" && p.uploadBytesLeft) extra = ` ${human(p.uploadBytesLeft)} to go.`;
+    // While paused nothing is being sent: say what will happen instead.
+    const explain = x.key === "toUpload" && last && last.pausedUntil ? "Found on this computer; sending is paused and continues when you resume." : x.explain;
+    return `<div class="stage ${x.key}"><span class="sw"></span><span class="n">${fmt(n)}</span><span><b>${x.label}.</b> ${explain}${extra}</span></div>`;
+  }).join("");
+  const total = `<p class="total"><b>${fmt(p.total)}</b> files in all${p.counting ? " so far. Still counting: the first look through a folder isn't finished, so the total will grow." : "."}</p>`;
+  return `<div class="stages">${rows}</div>${total}${notProcessedLine(p)}`;
+}
+
+// One line per folder: the same stages, briefly.
+function compactLegend(p) {
+  if (!p) return "";
   if (p.counting && p.total === 0) return `<div class="legend">Counting files...</div>`;
+  const s = stages(p);
   const parts = [
-    `<span><b>${fmt(p.processed)}</b> processed</span>`,
-    `<span><b>${fmt(p.synced)}</b> synced</span>`,
-    `<span><b>${fmt(p.total)}</b> files${p.counting ? " so far (still counting)" : ""}</span>`,
+    `<span><b>${fmt(s.processed)}</b> processed</span>`,
+    `<span><b>${fmt(s.waiting)}</b> waiting for LLM</span>`,
+    `<span><b>${fmt(s.toUpload)}</b> waiting to upload</span>`,
   ];
-  if (p.attention) parts.push(`<span class="warn"><b>${fmt(p.attention)}</b> need attention</span>`);
-  if (p.notInScope) parts.push(`<span>${fmt(p.notInScope)} not in scope</span>`);
-  if (p.uploadBytesLeft) parts.push(`<span>${human(p.uploadBytesLeft)} left to upload</span>`);
+  if (s.attention) parts.push(`<span class="warn"><b>${fmt(s.attention)}</b> need attention</span>`);
+  parts.push(`<span>of ${fmt(p.total)}${p.counting ? " so far" : ""}</span>`);
   return `<div class="legend">${parts.join("")}</div>`;
 }
 
@@ -64,10 +108,12 @@ function legend(p) {
 function processingNote(w) {
   const p = w.progress;
   if (!p || !w.key || p.synced === 0 || p.processed > 0) return "";
+  const waiting = stages(p).waiting;
   return `<div class="note-box">
-    <b>Next: processing.</b> Binaly Sync sends the lab's files. Your AI assistant reads each one and
-    writes the lab's notes: a scheduled task in Claude Desktop, set up once, that runs every hour.
-    Until it runs, ${fmt(p.synced)} synced file${p.synced === 1 ? " waits" : "s wait"} here.
+    <b>Next: processing by an LLM.</b> Binaly Sync only sends the lab's files to Binaly. An LLM
+    (Claude Desktop) reads each one and writes it into the lab's notes, as a scheduled task that
+    runs every hour. It's set up once, in Claude Desktop. Until it runs, ${fmt(waiting)}
+    file${waiting === 1 ? " waits" : "s wait"} for it.
     <div class="actions"><button class="primary" data-setup="${esc(w.key)}">How to set it up</button></div>
   </div>`;
 }
@@ -81,8 +127,13 @@ function renderStatus(s) {
   const pausedText = s.pausedUntil === "until-resumed" ? "Paused until you resume"
     : s.pausedUntil ? `Paused until ${new Date(s.pausedUntil).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "";
   $("activity").textContent = !signedIn ? "" : pausedText || (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
+  // Paused: only Resume (which also syncs right away). Running: Pause, and Sync now to sync
+  // without waiting for the next one. Never a button that can't do anything.
   $("btn-pause").textContent = s.pausedUntil ? "Resume" : "Pause";
+  $("btn-pause").className = s.pausedUntil ? "primary" : "quiet";
+  $("btn-sync").hidden = !!s.pausedUntil;
   $("btn-sync").disabled = !!st.running;
+  $("btn-sync").title = st.running ? "A sync is running now" : "Sync now, without waiting for the next one";
   const wss = st.workspaces && st.workspaces.length ? st.workspaces : (s.accounts || []).map((a) => ({ key: a.key, name: a.workspaceName, email: a.email, state: "ok" }));
   $("empty").hidden = wss.length > 0;
   $("workspaces").innerHTML = wss.map((w) => {
@@ -91,7 +142,7 @@ function renderStatus(s) {
     const folders = (w.folders || []).map((f) => `
       <div class="folder">
         <div class="path">${esc(f.path)}</div>
-        ${bar(f, true)}${legend(f)}
+        ${bar(f, true)}${compactLegend(f)}
         ${f.warning ? `<div class="warning">${esc(f.warning.reason)}<div class="actions"><button data-confirm="${esc(w.key)}">These files really were removed</button></div></div>` : ""}
       </div>`).join("");
     const warnings = (w.warnings || []).filter((x) => !(w.folders || []).some((f) => f.warning && f.warning.reason === x));
@@ -174,7 +225,7 @@ async function loadSettings() {
 // ---- routing ----
 function route() {
   const [screen, query] = (current || "status").split("?");
-  for (const v of ["status", "preview", "settings"]) $("view-" + v).hidden = v !== screen;
+  for (const v of ["status", "preview", "settings", "about"]) $("view-" + v).hidden = v !== screen;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === screen));
   if (screen === "preview") showPreview(new URLSearchParams(query).get("folder") || "");
   if (screen === "settings") loadSettings();
@@ -222,6 +273,7 @@ document.addEventListener("click", async (ev) => {
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
     else if (t.dataset.setup) await call("open-setup", { accountKey: t.dataset.setup });
     else if (t.id === "btn-log") await call("log", {});
+    else if (t.dataset.link) await call("open-link", { link: t.dataset.link });
     else if (t.id === "btn-check") await call("check-update", {});
     else if (t.hasAttribute("data-update")) { t.disabled = true; await call("update", {}); poll(); }
     else if (t.id === "btn-save") {

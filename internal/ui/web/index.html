@@ -13,6 +13,7 @@
   <nav>
     <a data-nav="status">Status</a>
     <a data-nav="settings">Settings</a>
+    <a data-nav="about">About</a>
   </nav>
 </header>
 <main>
@@ -69,10 +70,27 @@
     </div>
     <h2>Workspaces</h2>
     <div id="set-workspaces" class="card"></div>
-    <div class="actions"><button id="btn-signin">Add workspace...</button><button id="btn-log" class="quiet">Open run logs</button></div>
-    <h2>About</h2>
-    <div class="card notice"><span>Binaly Sync <b id="version"></b></span><button id="btn-check">Check for updates</button></div>
-    <p class="note">To remove Binaly Sync, use Windows Settings, Apps, Installed apps.</p>
+    <div class="actions"><button id="btn-signin">Add workspace...</button></div>
+  </section>
+
+  <section id="view-about" hidden>
+    <h1>About Binaly Sync</h1>
+    <div class="card notice"><span>Version <b id="version"></b></span><button id="btn-check">Check for updates</button></div>
+    <div class="card about">
+      <p>Binaly Sync keeps the lab's folders connected to Binaly. It finds the files in the folders
+      you chose, sends them to the lab's Binaly, and notices new and changed ones. It contains no
+      AI and decides nothing on its own: for each file, Binaly says whether to send it.</p>
+      <p>Reading the files and writing them into the lab's notes is done separately, by an LLM
+      (Claude Desktop) as a scheduled task. The lab's Binaly Sync page in the app shows how to set it up.</p>
+      <div class="links">
+        <button class="quiet" data-link="sends">What Binaly Sync sends, and what it never sends</button>
+        <button class="quiet" data-link="source">Source code (open source)</button>
+        <button class="quiet" data-link="website">binaly.ai</button>
+        <button class="quiet" id="btn-log">Run logs on this computer</button>
+      </div>
+    </div>
+    <p class="note">To remove Binaly Sync: Windows Settings, Apps, Installed apps, Binaly Sync, Uninstall. Files already in Binaly stay there.</p>
+    <p class="note">Apache License 2.0. Made by Binaly Management Ltd.</p>
   </section>
 </main>
 <script src="app.js"></script>

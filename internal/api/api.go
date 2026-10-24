@@ -149,7 +149,9 @@ type Folder struct {
 	} `json:"warning"`
 }
 
-// Progress is the bar: processed inside synced inside total.
+// Progress is the bar. Each file is in exactly one stage, and the stages add up to Total:
+// ToUpload + Waiting + Processed + Attention. (Synced = Waiting + Processed + Attention, kept
+// for servers that predate the stage counts.)
 type Progress struct {
 	Total           int   `json:"total"`
 	Synced          int   `json:"synced"`
@@ -159,6 +161,13 @@ type Progress struct {
 	NotProcessed    int   `json:"notProcessed"`
 	UploadBytesLeft int64 `json:"uploadBytesLeft"`
 	Counting        bool  `json:"counting"`
+	// Found, not yet in Binaly.
+	ToUpload int `json:"toUpload"`
+	// In Binaly, waiting for the LLM; WaitingOnDrive of them are read from the drive.
+	Waiting        int `json:"waiting"`
+	WaitingOnDrive int `json:"waitingOnDrive"`
+	// No longer in the folder; outside Total.
+	Removed int `json:"removed"`
 }
 
 // HelloIn is the check-in request.
