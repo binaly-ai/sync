@@ -25,7 +25,7 @@ Binaly, and asks which folders to sync. Before anything is sent, it shows you wh
 
 After that it runs in the background. Windows tells it when something changes in a synced
 folder, and it syncs that folder about half a minute after the changes stop. It also looks
-through every folder in full every 5 minutes, in case a change notice was missed (network drives
+through every folder in full every 15 minutes, in case a change notice was missed (network drives
 drop them). Settings, "Check folders every", changes that interval on this computer.
 
 It keeps itself up to date: it checks this repository's releases every few hours and installs a

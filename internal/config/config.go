@@ -61,7 +61,7 @@ type Settings struct {
 
 // DefaultCheckMinutes, and the limits a person can set it to.
 const (
-	DefaultCheckMinutes = 5
+	DefaultCheckMinutes = 15
 	MinCheckMinutes     = 1
 	MaxCheckMinutes     = 24 * 60
 )
