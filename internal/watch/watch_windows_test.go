@@ -8,13 +8,20 @@ import (
 	"time"
 )
 
+// waitChange returns the folders that changed within d, or nil. A signal with nothing to take
+// is left over from a burst already taken (the tray app skips those too), so it keeps waiting.
 func waitChange(w *Watcher, d time.Duration) []string {
-	select {
-	case <-w.Changed():
-		time.Sleep(200 * time.Millisecond) // let the rest of the burst land
-		return w.Take()
-	case <-time.After(d):
-		return nil
+	deadline := time.After(d)
+	for {
+		select {
+		case <-w.Changed():
+			time.Sleep(200 * time.Millisecond) // let the rest of the burst land
+			if got := w.Take(); len(got) > 0 {
+				return got
+			}
+		case <-deadline:
+			return nil
+		}
 	}
 }
 
