@@ -36,6 +36,9 @@ type fakeServer struct {
 	srv      *httptest.Server
 	// onReport, when set, runs after each report is stored (e.g. to pause the run mid-scan).
 	onReport func(n int)
+	// direct: "" offers no direct URL, "ok" a working one, "down" one nothing listens on.
+	direct                 string
+	directPuts, relayPuts  int
 }
 
 func newFake(t *testing.T, folder string) *fakeServer {
@@ -48,7 +51,7 @@ func newFake(t *testing.T, folder string) *fakeServer {
 func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r.Header.Get("authorization") != "Bearer test-token" && !strings.HasPrefix(r.URL.Path, "/put/") {
+	if r.Header.Get("authorization") != "Bearer test-token" && !strings.HasPrefix(r.URL.Path, "/put/") && !strings.HasPrefix(r.URL.Path, "/direct/") {
 		w.WriteHeader(401)
 		return
 	}
@@ -80,6 +83,12 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 				res.Action = "known"
 			default:
 				res.Action, res.UploadURL, res.StagingKey = "upload", f.srv.URL+"/put/"+fr.SHA256, "stage-"+fr.SHA256
+				switch f.direct {
+				case "ok":
+					res.DirectURL, res.DirectHeaders = f.srv.URL+"/direct/"+fr.SHA256, map[string]string{"X-Signed": "yes"}
+				case "down":
+					res.DirectURL = "http://127.0.0.1:1/direct/" + fr.SHA256
+				}
 			}
 			results = append(results, res)
 		}
@@ -87,7 +96,17 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			f.gone[pathx.Key(p)] = true
 		}
 		reply(map[string]any{"results": results})
+	case strings.HasPrefix(r.URL.Path, "/direct/"):
+		if r.Header.Get("X-Signed") != "yes" {
+			w.WriteHeader(403) // the signature covers this header
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		f.directPuts++
+		f.stored["pending:"+strings.TrimPrefix(r.URL.Path, "/direct/")] = b
+		w.WriteHeader(200)
 	case strings.HasPrefix(r.URL.Path, "/put/"):
+		f.relayPuts++
 		b, _ := io.ReadAll(r.Body)
 		f.stored["pending:"+strings.TrimPrefix(r.URL.Path, "/put/")] = b
 		w.WriteHeader(200)
@@ -274,4 +293,44 @@ func TestUnboundedQueue(t *testing.T) {
 	if i != n {
 		t.Fatalf("got %d jobs, want %d", i, n)
 	}
+}
+
+func TestUploadsGoDirectWhenOffered(t *testing.T) {
+	e, fake, dir := setup(t)
+	fake.direct = "ok"
+	write(t, filepath.Join(dir, "a.pdf"), "paper a")
+	write(t, filepath.Join(dir, "b.pdf"), "paper b")
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.directPuts != 2 || fake.relayPuts != 0 {
+		t.Fatalf("direct %d, relay %d: want both files sent straight to storage", fake.directPuts, fake.relayPuts)
+	}
+	if fake.stored[sha("paper a")] == nil || fake.stored[sha("paper b")] == nil {
+		t.Fatal("direct uploads were not committed")
+	}
+}
+
+func TestUploadsFallBackToRelayWhenStorageUnreachable(t *testing.T) {
+	e, fake, dir := setup(t)
+	fake.direct = "down"
+	write(t, filepath.Join(dir, "a.pdf"), "paper a")
+	write(t, filepath.Join(dir, "b.pdf"), "paper b")
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.relayPuts != 2 {
+		t.Fatalf("relay %d: want both files sent through the relay", fake.relayPuts)
+	}
+	if fake.stored[sha("paper a")] == nil || fake.stored[sha("paper b")] == nil {
+		t.Fatal("relayed uploads were not committed")
+	}
+	if e.directDownUntil.IsZero() {
+		t.Fatal("an unreachable storage host should switch later uploads to the relay")
+	}
+}
+
+func sha(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

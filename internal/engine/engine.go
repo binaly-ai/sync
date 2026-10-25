@@ -56,6 +56,9 @@ type Engine struct {
 	mu     sync.Mutex
 	status Status
 	metas  map[string]auth.Meta
+	// directDownUntil: storage could not be reached directly, so uploads use the server's
+	// relay until then.
+	directDownUntil time.Time
 }
 
 // Status is what the tray and the status page show.
@@ -208,8 +211,9 @@ type job struct {
 	entry  scan.Entry
 	key    string
 	sha    string
-	url    string
+	url    string // the server's relay
 	stage  string
+	direct upload.Target
 }
 
 // Run performs one sync across every signed-in workspace.
@@ -572,7 +576,8 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 			e.status.Uploading.Files++
 			e.status.Uploading.Bytes += en.Size
 			e.mu.Unlock()
-			jobs <- job{t: t, entry: en, key: key, sha: hashes[key], url: r.UploadURL, stage: r.StagingKey}
+			jobs <- job{t: t, entry: en, key: key, sha: hashes[key], url: r.UploadURL, stage: r.StagingKey,
+				direct: upload.Target{URL: r.DirectURL, Headers: r.DirectHeaders}}
 		case "register", "known":
 			lg.Event(r.Action, map[string]any{"path": r.Path, "workspace": t.ws.Name})
 		default:
@@ -647,7 +652,7 @@ func (e *Engine) uploadOne(ctx context.Context, j job, lim *upload.Limiter) erro
 		return scan.ErrChanging
 	}
 	e.setActivity("Uploading %s", filepath.Base(j.entry.Path))
-	if err := upload.Put(ctx, j.url, j.entry.Path, j.entry.Size, lim); err != nil {
+	if err := e.put(ctx, j, lim); err != nil {
 		return err
 	}
 	p := pathx.Canonical(j.entry.Path)
@@ -657,6 +662,32 @@ func (e *Engine) uploadOne(ctx context.Context, j job, lim *upload.Limiter) erro
 	return e.State.PutReported(j.t.acct.Key(), j.t.folder.ID, map[string]state.Reported{
 		j.key: {Path: p, Size: j.entry.Size, MtimeNs: j.entry.ModTime.UnixNano(), SHA256: j.sha, Uploaded: true},
 	})
+}
+
+// put sends a file straight to the lab's storage when the server offered that, and through
+// the server's relay otherwise. Relaying every byte through the server pinned its main thread
+// during one lab's first upload, so direct is the default. If storage can't be reached at all
+// (a firewall that allows only binaly.ai), the relay takes over for an hour before direct is
+// tried again; any other direct failure falls back for that one file.
+func (e *Engine) put(ctx context.Context, j job, lim *upload.Limiter) error {
+	e.mu.Lock()
+	directOK := j.direct.URL != "" && time.Now().After(e.directDownUntil)
+	e.mu.Unlock()
+	if directOK {
+		d := j.direct
+		d.Attempts = 2
+		err := upload.Put(ctx, d, j.entry.Path, j.entry.Size, lim)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		var ne *upload.NetError
+		if errors.As(err, &ne) {
+			e.mu.Lock()
+			e.directDownUntil = time.Now().Add(time.Hour)
+			e.mu.Unlock()
+		}
+	}
+	return upload.Put(ctx, upload.Target{URL: j.url}, j.entry.Path, j.entry.Size, lim)
 }
 
 // unsyncedSiblings lists folders next to synced ones that nothing syncs ("Not syncing" in the app).

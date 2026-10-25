@@ -78,10 +78,29 @@ func (lr *limitedReader) Read(p []byte) (int, error) {
 
 var client = &http.Client{Timeout: 0} // a large file on a slow uplink takes as long as it takes
 
-// Put sends a file's bytes to url, retrying network failures and server errors.
-func Put(ctx context.Context, url, path string, size int64, lim *Limiter) error {
+// Target is where to PUT a file's bytes.
+type Target struct {
+	URL string
+	// Headers the URL's signature covers; sent exactly as given.
+	Headers map[string]string
+	// Attempts before giving up (0 means 3).
+	Attempts int
+}
+
+// NetError is a failure to reach the target at all (no HTTP answer), as opposed to a refusal.
+type NetError struct{ Err error }
+
+func (e *NetError) Error() string { return "upload: " + e.Err.Error() }
+func (e *NetError) Unwrap() error { return e.Err }
+
+// Put sends a file's bytes to the target, retrying network failures and server errors.
+func Put(ctx context.Context, t Target, path string, size int64, lim *Limiter) error {
+	attempts := t.Attempts
+	if attempts <= 0 {
+		attempts = 3
+	}
 	var last error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -93,17 +112,23 @@ func Put(ctx context.Context, url, path string, size int64, lim *Limiter) error 
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequestWithContext(ctx, "PUT", url, &limitedReader{ctx: ctx, r: f, l: lim})
+		req, err := http.NewRequestWithContext(ctx, "PUT", t.URL, &limitedReader{ctx: ctx, r: f, l: lim})
 		if err != nil {
 			f.Close()
 			return err
 		}
 		req.ContentLength = size
 		req.Header.Set("content-type", "application/octet-stream")
+		for k, v := range t.Headers {
+			req.Header.Set(k, v)
+		}
 		res, err := client.Do(req)
 		f.Close()
 		if err != nil {
-			last = err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			last = &NetError{Err: err}
 			continue
 		}
 		io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))

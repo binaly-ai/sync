@@ -242,8 +242,12 @@ type ReportIn struct {
 type FileResult struct {
 	Path       string `json:"path"`
 	Action     string `json:"action"` // upload | known | register | excluded | rejected
-	UploadURL  string `json:"uploadUrl"`
+	UploadURL  string `json:"uploadUrl"` // the server's relay
 	StagingKey string `json:"stagingKey"`
+	// DirectURL is a signed PUT straight to the lab's storage; the bytes skip the server.
+	// DirectHeaders must be sent with it unchanged. Absent from older servers.
+	DirectURL     string            `json:"directUrl"`
+	DirectHeaders map[string]string `json:"directHeaders"`
 	Processed  bool   `json:"processed"`
 	Reason     string `json:"reason"`
 }
