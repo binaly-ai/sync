@@ -43,10 +43,6 @@ and it refuses Google Drive folders, because reading those would download them.
 For each file in a synced folder:
 
 - its **path, size, modification time and SHA-256 hash**;
-- for text data files (`.csv`, `.tsv`, `.txt`, `.dat`, `.asc`, `.xml`, `.xsl`, `.in`) and
-  spreadsheets (`.xlsx`), **the first 2 KB of text** (for a spreadsheet, its first header
-  cells). Binaly uses this to keep back files that look like they list people's personal
-  details;
 - **the file itself**, only when Binaly asks for it. Binaly asks for files up to 100 MB that
   aren't already stored. Larger files are only recorded by path and hash.
 
@@ -60,8 +56,8 @@ way the lab knows them).
 
 ## What never leaves the computer
 
-Files in folders nobody chose to sync. File contents beyond the hash, the 2 KB preview, and files
-Binaly asked for. Passwords: sign-in happens in the person's own browser, on Binaly's page.
+Files in folders nobody chose to sync. File contents beyond the hash, other than files Binaly
+asked for. Passwords: sign-in happens in the person's own browser, on Binaly's page.
 
 ## What happens to the files next
 
@@ -84,6 +80,6 @@ the policy version the server applied, and every error. The last 30 runs are kep
 
 ## Who decides what is uploaded
 
-Binaly, not the program: the size limit, the file types previewed and the exclusions come from
+Binaly, not the program: the size limit and the exclusions come from
 the server at each check-in. That lets the rules change without a new release, and it means
 this page describes the current defaults, not hard limits in the code.

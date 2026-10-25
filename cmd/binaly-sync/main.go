@@ -421,8 +421,8 @@ func cmdPreview(args []string) error {
 	if r.Unreadable > 0 {
 		fmt.Printf("  unreadable        %6d   (no permission)\n", r.Unreadable)
 	}
-	fmt.Println("\nNothing was sent. Binaly makes the final call per file (some files are kept back,")
-	fmt.Println("for example ones that look like they list people's personal details).")
+	fmt.Println("\nNothing was sent. Binaly makes the final call per file (files over 100 MB stay on")
+	fmt.Println("this computer and are recorded by name and fingerprint only).")
 	return nil
 }
 

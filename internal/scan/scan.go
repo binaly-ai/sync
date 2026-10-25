@@ -198,7 +198,7 @@ func Hash(e Entry) (string, error) {
 var sharedString = regexp.MustCompile(`<t[^>]*>([^<]*)</t>`)
 
 // Preview returns the first bytes of a text data file, or the first header cells of an
-// .xlsx, for the server's identifiable-content check. Only for the types the policy names.
+// .xlsx. Only for the types the policy names; the server has named none since 2026-10-25.
 func Preview(path string, p api.Policy) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	wanted := false
