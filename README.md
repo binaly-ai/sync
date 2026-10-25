@@ -5,8 +5,9 @@
 > then Run anyway. Signed releases follow shortly.
 
 Binaly Sync keeps your lab's folders connected to [Binaly](https://binaly.ai). It runs in the
-Windows tray, notices new and changed files, and sends them to your lab's Binaly workspace,
-where your AI assistant turns them into a searchable map of the lab's work.
+Windows tray, notices new and changed files, and sends them to your lab's Binaly workspace.
+There, a scheduled task in the Claude Desktop app, set up once from the lab's Binaly Sync page
+(app.binaly.ai/sync), turns them into a searchable map of the lab's work.
 
 It's a small, open-source program: you can read exactly what it does. It makes no decisions of
 its own and contains no AI. For each file it reports a name, a size, a date and a fingerprint
@@ -23,7 +24,8 @@ only (no administrator rights), adds itself to the Start menu, opens your browse
 Binaly, and asks which folders to sync. Before anything is sent, it shows you what it found.
 
 It keeps itself up to date: it checks this repository's releases every few hours and installs a
-new version when no sync is running. Settings can switch that to "tell me, don't install".
+new version when one appears, stopping a running sync first (the next sync picks up where it
+left off). Settings can switch that to "tell me, don't install".
 
 To remove it: Windows Settings, Apps, Installed apps, Binaly Sync, Uninstall. That removes the
 program, its start-at-logon entry, its sign-ins and its local files. Files already sent to
@@ -31,15 +33,27 @@ Binaly stay there.
 
 ## Using it
 
-The tray icon's menu has everything: Sync now, Pause, Add folder, Open in Binaly, Show log,
-Workspaces and Settings. One installation can be signed in to several Binaly workspaces at once.
+Click the tray icon to open Binaly Sync's window:
+
+- **Status:** each workspace's progress (processed, waiting for the LLM, waiting to upload,
+  needs attention), the folders being synced, Add folder, Stop syncing a folder, Sync now,
+  Pause (for 1, 6 or 24 hours, or until you resume) and Open in Binaly.
+- **Settings:** start at Windows sign-in, how updates install, an upload speed limit, and the
+  workspaces this computer is signed in to (Add workspace).
+- **About:** the version, Check for updates, the run logs, and links to this page and the source.
+
+The tray menu itself only opens the window, shows the version, checks for updates and quits.
+One installation can be signed in to several Binaly workspaces at once.
 
 For IT staff and support, the same program works from a terminal:
 
 ```
 binaly-sync preview <folder>      what would be synced; no sign-in, nothing leaves the computer
 binaly-sync login                 sign in (opens your browser)
+binaly-sync logout                sign out of a workspace
+binaly-sync workspaces            the workspaces this computer is signed in to
 binaly-sync add <folder>          sync a folder from this computer
+binaly-sync remove <folder>       stop syncing a folder from this computer
 binaly-sync sync                  run one sync now
 binaly-sync status                progress per workspace and folder
 binaly-sync log                   where the latest run log is

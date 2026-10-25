@@ -6,8 +6,14 @@ this repository.
 ## Where it connects
 
 To the Binaly server it's signed in to, over HTTPS (port 443). The default is
-`mcp.binaly.ai`. File uploads go to the same address; Binaly Sync never connects to a storage
-provider directly.
+`mcp.binaly.ai`.
+
+File uploads go straight to the lab's own storage at `storage.googleapis.com` (Google Cloud
+Storage), through a single-use upload link the Binaly server signs for that one file. The link
+can write one staging object in the lab's own bucket and nothing else, and it expires within an
+hour. If this computer can't reach `storage.googleapis.com` (a firewall that allows only
+binaly.ai), uploads go through `mcp.binaly.ai` instead, automatically. For an allowlist, the two
+hosts are `mcp.binaly.ai` and `storage.googleapis.com`.
 
 To check for updates, it also downloads this repository's latest release information from
 `github.com` (and GitHub's download hosts under `githubusercontent.com`) every few hours,
@@ -44,8 +50,9 @@ For each file in a synced folder:
 - **the file itself**, only when Binaly asks for it. Binaly asks for files up to 100 MB that
   aren't already stored. Larger files are only recorded by path and hash.
 
-Each upload is checked by the server: it hashes what arrived and refuses anything that doesn't
-match.
+Each upload is checked by the server, however it arrived: it hashes what landed in staging and
+refuses anything that doesn't match the hash this computer reported. Only then is the file
+stored.
 
 Once per check-in it also sends: a random install ID, the computer's name, the operating system,
 Binaly Sync's version, and which drive letters map to which network shares (so paths appear the
@@ -55,6 +62,14 @@ way the lab knows them).
 
 Files in folders nobody chose to sync. File contents beyond the hash, the 2 KB preview, and files
 Binaly asked for. Passwords: sign-in happens in the person's own browser, on Binaly's page.
+
+## What happens to the files next
+
+Binaly Sync only sends. The lab's AI assistant does the reading: a scheduled task in the Claude
+Desktop app, which the lab sets up once from its Binaly Sync page (app.binaly.ai/sync), takes the
+files Sync sent and writes the lab's knowledge base. It reads uploaded files from Binaly, and
+files over 100 MB from the lab's own drive, where they stayed. Binaly Sync itself contains no AI
+and makes no decisions about content.
 
 ## Where sign-ins are kept
 
