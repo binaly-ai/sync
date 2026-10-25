@@ -25,7 +25,16 @@ import (
 	"github.com/binaly-ai/sync/internal/runlog"
 	"github.com/binaly-ai/sync/internal/scan"
 	"github.com/binaly-ai/sync/internal/ui"
+	"github.com/binaly-ai/sync/internal/watch"
 )
+
+// After watching sees a change, wait until the folder has been quiet this long before syncing
+// it: copying a run's output produces thousands of changes, and one walk covers them all...
+const settle = 30 * time.Second
+
+// ...but sync at least this soon after the first change, so a folder that never goes quiet
+// (an instrument writing continuously) still syncs.
+const settleMax = 3 * time.Minute
 
 var (
 	//go:embed icons/binaly.ico
@@ -59,9 +68,12 @@ type trayApp struct {
 	ctx     context.Context
 
 	updateNow chan updateRequest
+	// watcher reports changes in synced folders; settingsSaved wakes the scheduler when the
+	// check interval may have changed.
+	watcher       *watch.Watcher
+	settingsSaved chan struct{}
 
 	mu        sync.Mutex
-	interval  time.Duration
 	runCancel context.CancelFunc // the sync in progress, so Pause can stop it
 	update    updateStatus
 }
@@ -105,7 +117,8 @@ func runTray() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan updateRequest, 1), ctx: ctx, interval: 15 * time.Minute}
+	app := &trayApp{e: e, trigger: make(chan engine.Options, 4), updateNow: make(chan updateRequest, 1), ctx: ctx,
+		watcher: watch.New(), settingsSaved: make(chan struct{}, 1)}
 	app.win = &ui.Window{B: app, DataPath: filepath.Join(config.Dir(), "webview"), OnError: app.windowError}
 	_ = os.Remove(filepath.Join(config.Dir(), "ui.url")) // from versions that served the screens on a local port
 	systray.Run(app.onReady, func() { cancel() })
@@ -131,6 +144,7 @@ func (a *trayApp) onReady() {
 	systray.SetOnTapped(func() { a.win.Show("status") })
 
 	go a.scheduler()
+	go a.watchLoop()
 	go a.refreshTray()
 	go a.updater(mUpdate)
 	go listenShow(a.ctx, func() { a.win.Show("status") })
@@ -165,8 +179,12 @@ func (a *trayApp) onReady() {
 	}()
 }
 
-// scheduler runs a sync at start, every interval, and on demand.
+// scheduler runs a sync at start, on demand, when watching saw a change, and a full look
+// through every folder each check interval (Settings, "Check folders every"). The interval
+// counts from the last full look: syncs of single changed folders don't push it back, so a
+// busy folder can't keep the others from being checked.
 func (a *trayApp) scheduler() {
+	defer a.watcher.Close()
 	run := func(opt engine.Options) {
 		ctx, cancel := context.WithCancel(a.ctx)
 		a.mu.Lock()
@@ -177,24 +195,73 @@ func (a *trayApp) scheduler() {
 		a.runCancel = nil
 		a.mu.Unlock()
 		cancel()
-		if s := a.e.Snapshot(); len(s.Workspaces) > 0 {
-			a.mu.Lock()
-			a.interval = 15 * time.Minute
-			a.mu.Unlock()
-		}
+		// The check-in told us the folders as they are now: watch exactly those.
+		a.watcher.Set(watchFolders(a.e.WatchList()))
 	}
 	run(engine.Options{})
+	lastFull := time.Now()
 	for {
-		a.mu.Lock()
-		wait := a.interval
-		a.mu.Unlock()
+		timer := time.NewTimer(time.Until(lastFull.Add(a.e.Cfg.Settings().CheckEvery())))
 		select {
 		case <-a.ctx.Done():
+			timer.Stop()
 			return
 		case opt := <-a.trigger:
 			run(opt)
-		case <-time.After(wait):
+			if len(opt.Folders) == 0 {
+				lastFull = time.Now()
+			}
+		case <-timer.C:
 			run(engine.Options{})
+			lastFull = time.Now()
+		case <-a.settingsSaved:
+			// Loop round: the timer is rebuilt from the new interval.
+		}
+		timer.Stop()
+	}
+}
+
+func watchFolders(list []engine.WatchFolder) []watch.Folder {
+	out := make([]watch.Folder, 0, len(list))
+	for _, f := range list {
+		out = append(out, watch.Folder{Key: f.Key, Path: f.Path, Ignore: f.Rules.Ignores})
+	}
+	return out
+}
+
+// watchLoop turns changes that watching saw into syncs of just those folders, once each folder
+// has settled (see settle and settleMax).
+func (a *trayApp) watchLoop() {
+	var first, last time.Time
+	pending := false
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-a.watcher.Changed():
+			now := time.Now()
+			if !pending {
+				first, pending = now, true
+			}
+			last = now
+		case <-tick.C:
+			if !pending || (time.Since(last) < settle && time.Since(first) < settleMax) {
+				continue
+			}
+			folders := a.watcher.Take()
+			if len(folders) == 0 {
+				pending = false
+				continue
+			}
+			select {
+			case a.trigger <- engine.Options{Folders: folders}:
+				pending = false
+			default:
+				// Syncs already queued: keep these for the next tick.
+				a.watcher.Mark(folders...)
+			}
 		}
 	}
 }
@@ -485,6 +552,7 @@ func (a *trayApp) SaveSettings(raw json.RawMessage) error {
 		StartAtLogon  bool   `json:"startAtLogon"`
 		Updates       string `json:"updates"`
 		BandwidthKBps int    `json:"bandwidthKBps"`
+		CheckMinutes  int    `json:"checkMinutes"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return err
@@ -497,8 +565,13 @@ func (a *trayApp) SaveSettings(raw json.RawMessage) error {
 	}
 	if err := a.e.Cfg.UpdateSettings(func(s *config.Settings) {
 		s.StartAtLogon, s.Updates, s.BandwidthKBps = in.StartAtLogon, in.Updates, in.BandwidthKBps
+		s.CheckMinutes = config.ClampCheckMinutes(in.CheckMinutes)
 	}); err != nil {
 		return err
+	}
+	select {
+	case a.settingsSaved <- struct{}{}:
+	default:
 	}
 	return install.SetStartAtLogon(in.StartAtLogon, install.Target())
 }

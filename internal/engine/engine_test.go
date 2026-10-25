@@ -39,6 +39,8 @@ type fakeServer struct {
 	// direct: "" offers no direct URL, "ok" a working one, "down" one nothing listens on.
 	direct                 string
 	directPuts, relayPuts  int
+	// notDue: hello says another machine walked the folder moments ago.
+	notDue bool
 }
 
 func newFake(t *testing.T, folder string) *fakeServer {
@@ -61,7 +63,7 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		reply(map[string]any{
 			"machineId": "m_test", "workspace": map[string]string{"id": "w1", "name": "Test"},
 			"policy":    api.DefaultPolicy,
-			"folders":   []map[string]any{{"id": "f1", "path": f.folder, "exclusions": []string{}, "scanDue": true}},
+			"folders":   []map[string]any{{"id": "f1", "path": f.folder, "exclusions": []string{}, "scanDue": !f.notDue}},
 		})
 	case r.URL.Path == "/sync/v1/report":
 		var in api.ReportIn
@@ -333,4 +335,56 @@ func TestUploadsFallBackToRelayWhenStorageUnreachable(t *testing.T) {
 func sha(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// Watching saw a change: the run walks that folder even though hello says another machine
+// walked it moments ago, and walks no other folder.
+func TestRunLimitedToChangedFolders(t *testing.T) {
+	e, fake, dir := setup(t)
+	ctx := context.Background()
+	write(t, filepath.Join(dir, "a.csv"), "1")
+	if err := e.Run(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	wl := e.WatchList()
+	if len(wl) != 1 || wl[0].Key != pathx.Key(dir) {
+		t.Fatalf("watch list %+v, want the one synced folder", wl)
+	}
+	if !wl[0].Rules.Ignores("sub/~$notes.docx") || wl[0].Rules.Ignores("sub/notes.docx") {
+		t.Fatal("the watch rules should ignore Office lock files and nothing else here")
+	}
+
+	fake.notDue = true
+	write(t, filepath.Join(dir, "b.csv"), "2")
+	n := len(fake.reports)
+	if err := e.Run(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesReported(fake, n); len(got) != 0 {
+		t.Fatalf("a scheduled run walked a folder that wasn't due: %v", got)
+	}
+
+	if err := e.Run(ctx, Options{Folders: []string{"c:/somewhere/else"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesReported(fake, n); len(got) != 0 {
+		t.Fatalf("a run for another folder walked this one: %v", got)
+	}
+
+	if err := e.Run(ctx, Options{Folders: []string{pathx.Key(dir)}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesReported(fake, n); len(got) != 1 || got[0] != "b.csv" {
+		t.Fatalf("the changed folder's run reported %v, want [b.csv]", got)
+	}
+}
+
+// A workspace whose policy turns watching off has nothing watched.
+func TestWatchListHonoursPolicy(t *testing.T) {
+	e, _, dir := setup(t)
+	write(t, filepath.Join(dir, "a.csv"), "1")
+	e.watch = map[string][]WatchFolder{"someone-signed-out": {{Key: "x", Path: dir}}}
+	if got := e.WatchList(); len(got) != 0 {
+		t.Fatalf("watching folders of an account that isn't signed in: %+v", got)
+	}
 }

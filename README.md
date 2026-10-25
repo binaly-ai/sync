@@ -23,6 +23,11 @@ and run it (`binaly-sync-arm64.exe` for ARM computers). It installs itself for y
 only (no administrator rights), adds itself to the Start menu, opens your browser to sign in to
 Binaly, and asks which folders to sync. Before anything is sent, it shows you what it found.
 
+After that it runs in the background. Windows tells it when something changes in a synced
+folder, and it syncs that folder about half a minute after the changes stop. It also looks
+through every folder in full every 5 minutes, in case a change notice was missed (network drives
+drop them). Settings, "Check folders every", changes that interval on this computer.
+
 It keeps itself up to date: it checks this repository's releases every few hours and installs a
 new version when one appears, stopping a running sync first (the next sync picks up where it
 left off). Settings can switch that to "tell me, don't install".

@@ -105,6 +105,23 @@ func (r Rules) skipName(name string) bool {
 	return false
 }
 
+// Ignores reports whether a change at rel (a path inside a synced folder) is one a walk would
+// skip anyway: a built-in excluded name (Office's ~$ lock files, Thumbs.db) or anything under
+// an excluded directory. Watching uses it so that opening a document doesn't start a sync.
+func (r Rules) Ignores(rel string) bool {
+	parts := strings.FieldsFunc(rel, func(c rune) bool { return c == '/' || c == filepath.Separator })
+	if len(parts) == 0 {
+		return false
+	}
+	for _, d := range parts[:len(parts)-1] {
+		if r.dirs[strings.ToLower(d)] {
+			return true
+		}
+	}
+	last := parts[len(parts)-1]
+	return r.dirs[strings.ToLower(last)] || r.skipName(last)
+}
+
 // Walk lists the files under root that sync should consider.
 func Walk(root string, r Rules) ([]Entry, Stats, error) {
 	var out []Entry

@@ -292,6 +292,7 @@ async function loadSettings() {
   $("set-logon").checked = !!s.startAtLogon;
   $("set-updates").value = s.updates || "auto";
   $("set-bw").value = s.bandwidthKBps || 0;
+  $("set-check").value = s.checkMinutes || 5;
 }
 
 // ---- routing ----
@@ -369,7 +370,8 @@ document.addEventListener("click", async (ev) => {
     }
     else if (t.hasAttribute("data-update")) { t.disabled = true; await call("update", {}); poll(); }
     else if (t.id === "btn-save") {
-      await call("settings", { settings: { startAtLogon: $("set-logon").checked, updates: $("set-updates").value, bandwidthKBps: Number($("set-bw").value) || 0 } });
+      await call("settings", { settings: { startAtLogon: $("set-logon").checked, updates: $("set-updates").value, bandwidthKBps: Number($("set-bw").value) || 0, checkMinutes: Number($("set-check").value) || 5 } });
+      loadSettings(); // shows the interval as saved, within its limits
       $("saved").hidden = false; setTimeout(() => ($("saved").hidden = true), 2000);
     }
   } catch (e) {

@@ -44,6 +44,16 @@ type Options struct {
 	Force bool
 	// ConfirmMassDeletion passes the server's mass-deletion guard (a person checked).
 	ConfirmMassDeletion bool
+	// Folders limits the run to these folders (pathx.Key of each path), which watching saw
+	// change. They are walked even if another machine walked them moments ago.
+	Folders []string
+}
+
+// WatchFolder is a synced folder to watch for changes.
+type WatchFolder struct {
+	Key   string // pathx.Key(Path)
+	Path  string
+	Rules scan.Rules // the built-in exclusions: changes they cover never start a sync
 }
 
 // Engine is the long-lived sync machinery. One per process.
@@ -59,6 +69,34 @@ type Engine struct {
 	// directDownUntil: storage could not be reached directly, so uploads use the server's
 	// relay until then.
 	directDownUntil time.Time
+	// watch: each account's folders to watch, from its last successful check-in.
+	watch map[string][]WatchFolder
+}
+
+// WatchList returns the folders to watch: every folder of every signed-in workspace whose
+// policy allows watching, once each however many workspaces sync it.
+func (e *Engine) WatchList() []WatchFolder {
+	signedIn := map[string]bool{}
+	for _, a := range e.Cfg.Accounts() {
+		signedIn[a.Key()] = true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	seen := map[string]bool{}
+	var out []WatchFolder
+	for acct, folders := range e.watch {
+		if !signedIn[acct] {
+			continue
+		}
+		for _, f := range folders {
+			if !seen[f.Key] {
+				seen[f.Key] = true
+				out = append(out, f)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // Status is what the tray and the status page show.
@@ -275,14 +313,29 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 		r := &acctRun{acct: a, client: e.Client(ctx, a), ws: ws, counts: map[string]int{}}
 		runs = append(runs, r)
 		lg.Event("hello", map[string]any{"workspace": ws.Name, "policy": h.Policy.Version, "folders": len(h.Folders)})
+		var watch []WatchFolder
+		for _, f := range h.Folders {
+			if h.Policy.WatchChanges {
+				watch = append(watch, WatchFolder{Key: pathx.Key(f.Path), Path: f.Path, Rules: scan.NewRules(h.Policy, nil)})
+			}
+		}
+		e.mu.Lock()
+		if e.watch == nil {
+			e.watch = map[string][]WatchFolder{}
+		}
+		e.watch[a.Key()] = watch
+		e.mu.Unlock()
 		for _, f := range h.Folders {
 			if f.Warning != nil {
 				ws.Warnings = append(ws.Warnings, f.Warning.Reason)
 			}
 			key := pathx.Key(f.Path)
+			if len(opt.Folders) > 0 && !contains(opt.Folders, key) {
+				continue
+			}
 			hasReported := e.State.HasReported(a.Key(), f.ID)
 			full := opt.Force || !hasReported || time.Since(e.State.LastFull(a.Key(), f.ID)) > fullEvery
-			if !f.ScanDue && !full && !opt.Force {
+			if !f.ScanDue && !full && !opt.Force && len(opt.Folders) == 0 {
 				continue // another machine walked it moments ago
 			}
 			reported, _ := e.State.AllReported(a.Key(), f.ID)
@@ -405,6 +458,15 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 	e.setActivity("Up to date")
 	lg.Event("done", map[string]any{"uploaded": uploaded, "uploadFailed": uploadFailed, "seconds": int(time.Since(started).Seconds())})
 	return nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func filterAccounts(all []config.Account, ws string) []config.Account {

@@ -52,8 +52,36 @@ type Settings struct {
 	Updates string `json:"updates"`
 	// BandwidthKBps limits uploads; 0 means no limit.
 	BandwidthKBps int `json:"bandwidthKBps"`
+	// CheckMinutes is how often every folder is looked through in full, the safety net under
+	// watching for changes; 0 means DefaultCheckMinutes.
+	CheckMinutes int `json:"checkMinutes,omitempty"`
 	// PausedUntil, RFC 3339, empty when running, or PausedIndefinitely ("until I resume").
 	PausedUntil string `json:"pausedUntil,omitempty"`
+}
+
+// DefaultCheckMinutes, and the limits a person can set it to.
+const (
+	DefaultCheckMinutes = 5
+	MinCheckMinutes     = 1
+	MaxCheckMinutes     = 24 * 60
+)
+
+// CheckEvery is how long to wait between full looks through the folders.
+func (s Settings) CheckEvery() time.Duration {
+	return time.Duration(ClampCheckMinutes(s.CheckMinutes)) * time.Minute
+}
+
+// ClampCheckMinutes keeps a check interval within the limits; 0 (never set) is the default.
+func ClampCheckMinutes(m int) int {
+	switch {
+	case m <= 0:
+		return DefaultCheckMinutes
+	case m < MinCheckMinutes:
+		return MinCheckMinutes
+	case m > MaxCheckMinutes:
+		return MaxCheckMinutes
+	}
+	return m
 }
 
 // PausedIndefinitely is PausedUntil for a pause that lasts until the person resumes.
@@ -115,7 +143,7 @@ func Open() (*Store, error) {
 			return nil, err
 		}
 	case errors.Is(err, os.ErrNotExist):
-		s.data.Settings = Settings{StartAtLogon: true, Updates: "auto"}
+		s.data.Settings = Settings{StartAtLogon: true, Updates: "auto", CheckMinutes: DefaultCheckMinutes}
 	default:
 		return nil, err
 	}
