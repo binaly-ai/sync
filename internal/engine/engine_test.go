@@ -41,6 +41,9 @@ type fakeServer struct {
 	directPuts, relayPuts  int
 	// notDue: hello says another machine walked the folder moments ago.
 	notDue bool
+	// failReport, when set, answers report number n (counting from 1) with this status instead.
+	failReport func(n int) int
+	reportCalls int
 }
 
 func newFake(t *testing.T, folder string) *fakeServer {
@@ -66,6 +69,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			"folders":   []map[string]any{{"id": "f1", "path": f.folder, "exclusions": []string{}, "scanDue": !f.notDue}},
 		})
 	case r.URL.Path == "/sync/v1/report":
+		f.reportCalls++
+		if f.failReport != nil {
+			if code := f.failReport(f.reportCalls); code != 0 {
+				w.WriteHeader(code)
+				return
+			}
+		}
 		var in api.ReportIn
 		json.NewDecoder(r.Body).Decode(&in)
 		f.reports = append(f.reports, in)
@@ -386,5 +396,80 @@ func TestWatchListHonoursPolicy(t *testing.T) {
 	e.watch = map[string][]WatchFolder{"someone-signed-out": {{Key: "x", Path: dir}}}
 	if got := e.WatchList(); len(got) != 0 {
 		t.Fatalf("watching folders of an account that isn't signed in: %+v", got)
+	}
+}
+
+// A proxy's 502 (Caddy reusing a connection the server just closed, 2026-10-26) is retried
+// once, so the run finishes with nothing missing and no warning.
+func TestGateway502IsRetried(t *testing.T) {
+	e, fake, dir := setup(t)
+	for i := 0; i < 2*batchSize; i++ {
+		write(t, filepath.Join(dir, fmt.Sprintf("f%04d.pdf", i)), fmt.Sprintf("paper %d", i))
+	}
+	fake.failReport = func(n int) int {
+		if n == 2 {
+			return 502
+		}
+		return 0
+	}
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range e.Snapshot().Workspaces {
+		if len(ws.Warnings) > 0 {
+			t.Fatalf("a retried 502 still left warnings: %v", ws.Warnings)
+		}
+	}
+	if got := len(fake.reported); got != 2*batchSize {
+		t.Fatalf("server saw %d files, want %d", got, 2*batchSize)
+	}
+}
+
+// A report that fails for good during a full walk leaves the server without some files, so
+// the walk must not end by closing the scan: closing marks every file it didn't see as gone.
+func TestFailedReportClosesNoScan(t *testing.T) {
+	e, fake, dir := setup(t)
+	for i := 0; i < 3*batchSize; i++ {
+		write(t, filepath.Join(dir, fmt.Sprintf("f%04d.pdf", i)), fmt.Sprintf("paper %d", i))
+	}
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	n := len(fake.reports)
+	first := fake.reportCalls
+	fake.failReport = func(c int) int {
+		if c == first+2 {
+			return 500
+		}
+		return 0
+	}
+	if err := e.Run(context.Background(), Options{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range fake.reports[n:] {
+		if len(r.Deleted) > 0 || r.Last {
+			t.Fatalf("a walk with a failed report closed the scan: %d deleted, last=%v", len(r.Deleted), r.Last)
+		}
+	}
+	warned := false
+	for _, ws := range e.Snapshot().Workspaces {
+		warned = warned || len(ws.Warnings) > 0
+	}
+	if !warned {
+		t.Fatal("the failed report wasn't shown as a warning")
+	}
+
+	// The next walk, with the server answering again, closes the scan as usual.
+	fake.failReport = nil
+	n = len(fake.reports)
+	if err := e.Run(context.Background(), Options{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	for _, r := range fake.reports[n:] {
+		closed = closed || r.Last
+	}
+	if !closed {
+		t.Fatal("the next walk didn't close the scan")
 	}
 }

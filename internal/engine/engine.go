@@ -242,6 +242,9 @@ type target struct {
 	report  map[string]state.Reported // what it was told before this run
 	seen    map[string]bool
 	ws      *WorkspaceStatus
+	// failed: a report in this walk failed, so the server didn't see every file and the walk
+	// must not end with deletions or close the scan (which marks unseen files gone).
+	failed bool
 }
 
 type job struct {
@@ -565,6 +568,7 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 			if err != nil {
 				t.ws.Warnings = append(t.ws.Warnings, fmt.Sprintf("report for %s failed: %v", root, err))
 				lg.Event("report-failed", map[string]any{"folder": root, "error": err.Error()})
+				t.failed = true
 				continue
 			}
 			t.first = false
@@ -577,6 +581,9 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		return
 	}
 	for _, t := range targets {
+		if t.failed {
+			continue // the next walk tries again
+		}
 		var deleted []string
 		var deletedKeys []string
 		for key, r := range t.report {

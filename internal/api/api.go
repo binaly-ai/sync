@@ -61,7 +61,11 @@ func (c *Client) http() *http.Client {
 	return &http.Client{Timeout: 5 * time.Minute}
 }
 
+// gatewayRetryWait is how long a call waits before its one retry after a 502, 503 or 504.
+var gatewayRetryWait = 2 * time.Second
+
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	retriedGateway := false
 	for attempt := 0; attempt < 2; attempt++ {
 		tok, err := c.Tokens.Token(ctx)
 		if err != nil {
@@ -90,6 +94,18 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		if res.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			// The access token expired early or was revoked; refresh once and retry.
 			c.Tokens.Invalidate()
+			continue
+		}
+		// A proxy's 502/503/504 (a dropped connection, a restart) is retried once. Every call
+		// is safe to repeat: a report of the same files in the same scan says the same thing.
+		if (res.StatusCode == http.StatusBadGateway || res.StatusCode == http.StatusServiceUnavailable || res.StatusCode == http.StatusGatewayTimeout) && !retriedGateway {
+			retriedGateway = true
+			attempt--
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(gatewayRetryWait):
+			}
 			continue
 		}
 		if res.StatusCode != 200 {
