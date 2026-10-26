@@ -179,10 +179,18 @@ func (a *trayApp) onReady() {
 	}()
 }
 
+// retryFirst and retryMax pace the retries after a failed check-in: 2, 4, 8 ... minutes,
+// never later than the regular interval.
+const (
+	retryFirst = 2 * time.Minute
+	retryMax   = 30 * time.Minute
+)
+
 // scheduler runs a sync at start, on demand, when watching saw a change, and a full look
 // through every folder each check interval (Settings, "Check folders every"). The interval
 // counts from the last full look: syncs of single changed folders don't push it back, so a
-// busy folder can't keep the others from being checked.
+// busy folder can't keep the others from being checked. A full look that couldn't reach a
+// workspace (the server restarting) is tried again within minutes, not a whole interval later.
 func (a *trayApp) scheduler() {
 	defer a.watcher.Close()
 	run := func(opt engine.Options) {
@@ -198,10 +206,27 @@ func (a *trayApp) scheduler() {
 		// The check-in told us the folders as they are now: watch exactly those.
 		a.watcher.Set(watchFolders(a.e.WatchList()))
 	}
+	var retry time.Duration
+	nextRetry := func() {
+		if !a.e.CheckInFailed() {
+			retry = 0
+			return
+		}
+		if retry == 0 {
+			retry = retryFirst
+		} else if retry *= 2; retry > retryMax {
+			retry = retryMax
+		}
+	}
 	run(engine.Options{})
 	lastFull := time.Now()
+	nextRetry()
 	for {
-		timer := time.NewTimer(time.Until(lastFull.Add(a.e.Cfg.Settings().CheckEvery())))
+		wait := time.Until(lastFull.Add(a.e.Cfg.Settings().CheckEvery()))
+		if retry > 0 && time.Until(lastFull.Add(retry)) < wait {
+			wait = time.Until(lastFull.Add(retry))
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-a.ctx.Done():
 			timer.Stop()
@@ -210,10 +235,12 @@ func (a *trayApp) scheduler() {
 			run(opt)
 			if len(opt.Folders) == 0 {
 				lastFull = time.Now()
+				nextRetry()
 			}
 		case <-timer.C:
 			run(engine.Options{})
 			lastFull = time.Now()
+			nextRetry()
 		case <-a.settingsSaved:
 			// Loop round: the timer is rebuilt from the new interval.
 		}

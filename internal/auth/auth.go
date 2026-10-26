@@ -174,12 +174,30 @@ func Login(ctx context.Context, m Meta, clientID string, openBrowser func(string
 	})
 }
 
+// retryWait is how long a token request waits before its one retry after a 502 or 503.
+var retryWait = 2 * time.Second
+
 func exchange(ctx context.Context, endpoint string, form url.Values) (Secret, error) {
-	req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(form.Encode()))
-	req.Header.Set("content-type", "application/x-www-form-urlencoded")
-	res, err := client.Do(req)
-	if err != nil {
-		return Secret{}, err
+	var res *http.Response
+	for attempt := 0; ; attempt++ {
+		req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(form.Encode()))
+		req.Header.Set("content-type", "application/x-www-form-urlencoded")
+		var err error
+		if res, err = client.Do(req); err != nil {
+			return Secret{}, err
+		}
+		// A proxy's 502 or 503 means the request never reached the server (it was restarting,
+		// 2026-10-26), so the refresh token wasn't spent and one retry is safe. Not a 504: the
+		// server may have rotated the token, and resending the old one would sign this computer out.
+		if (res.StatusCode != http.StatusBadGateway && res.StatusCode != http.StatusServiceUnavailable) || attempt > 0 {
+			break
+		}
+		res.Body.Close()
+		select {
+		case <-ctx.Done():
+			return Secret{}, ctx.Err()
+		case <-time.After(retryWait):
+		}
 	}
 	defer res.Body.Close()
 	var out struct {

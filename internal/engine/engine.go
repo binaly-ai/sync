@@ -514,6 +514,19 @@ func filterAccounts(all []config.Account, ws string) []config.Account {
 	return out
 }
 
+// CheckInFailed reports whether the last run couldn't reach a workspace for a reason that may
+// pass by itself (the server restarting, the network down), as opposed to needing a person.
+func (e *Engine) CheckInFailed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, w := range e.status.Workspaces {
+		if w.State == "error" {
+			return true
+		}
+	}
+	return false
+}
+
 func classify(err error) (string, string) {
 	switch {
 	case errors.Is(err, auth.ErrNeedsSignIn):

@@ -473,3 +473,21 @@ func TestFailedReportClosesNoScan(t *testing.T) {
 		t.Fatal("the next walk didn't close the scan")
 	}
 }
+
+// The scheduler retries soon after a check-in that couldn't reach the server.
+func TestCheckInFailedWhenServerUnreachable(t *testing.T) {
+	e, fake, _ := setup(t)
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.CheckInFailed() {
+		t.Fatal("a successful run reported a failed check-in")
+	}
+	fake.srv.Close()
+	if err := e.Run(context.Background(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.CheckInFailed() {
+		t.Fatal("an unreachable server wasn't reported as a failed check-in")
+	}
+}
