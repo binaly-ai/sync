@@ -141,7 +141,7 @@ var DefaultPolicy = Policy{
 	Version:             "builtin",
 	UploadLimitBytes:    100 << 20,
 	ExcludeNames:        []string{"Thumbs.db", "desktop.ini", ".DS_Store", "~$*", "*.tmp", "~*.tmp"},
-	ExcludeDirs:         []string{".git", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information", ".Trash"},
+	ExcludeDirs:         []string{".git", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information", ".Trash", "OneNote_RecycleBin"},
 	PreviewExtensions:   []string{".csv", ".tsv", ".txt", ".dat", ".asc", ".xml", ".xsl", ".in", ".xlsx"},
 	PreviewBytes:        2048,
 	WatchChanges:        true,
@@ -220,8 +220,8 @@ func (c *Client) Hello(ctx context.Context, in HelloIn) (*HelloOut, error) {
 // AddFolder starts syncing a folder from this machine.
 func (c *Client) AddFolder(ctx context.Context, machineID, path string) (*Folder, []string, error) {
 	var out struct {
-		Folder        Folder   `json:"folder"`
-		AlsoSyncedBy  []string `json:"alsoSyncedBy"`
+		Folder       Folder   `json:"folder"`
+		AlsoSyncedBy []string `json:"alsoSyncedBy"`
 	}
 	err := c.do(ctx, "POST", "/sync/v1/folders", map[string]any{"machineId": machineID, "path": path}, &out)
 	return &out.Folder, out.AlsoSyncedBy, err
@@ -239,6 +239,9 @@ type FileReport struct {
 	Mtime   string `json:"mtime"`
 	SHA256  string `json:"sha256"`
 	Preview string `json:"preview,omitempty"`
+	// Rendition "pdf": a OneNote section, sent as the PDF its OneNote app exported. Size and
+	// SHA256 are the PDF's; Path and Mtime stay the section's.
+	Rendition string `json:"rendition,omitempty"`
 }
 
 // ReportIn is one batch for one folder.
@@ -257,15 +260,15 @@ type ReportIn struct {
 // FileResult is the server's answer for one file.
 type FileResult struct {
 	Path       string `json:"path"`
-	Action     string `json:"action"` // upload | known | register | excluded | rejected
+	Action     string `json:"action"`    // upload | known | register | excluded | rejected
 	UploadURL  string `json:"uploadUrl"` // the server's relay
 	StagingKey string `json:"stagingKey"`
 	// DirectURL is a signed PUT straight to the lab's storage; the bytes skip the server.
 	// DirectHeaders must be sent with it unchanged. Absent from older servers.
 	DirectURL     string            `json:"directUrl"`
 	DirectHeaders map[string]string `json:"directHeaders"`
-	Processed  bool   `json:"processed"`
-	Reason     string `json:"reason"`
+	Processed     bool              `json:"processed"`
+	Reason        string            `json:"reason"`
 }
 
 // ReportOut is the answer to a batch.

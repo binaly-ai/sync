@@ -34,7 +34,7 @@ Only the folders a person chose to sync, and only:
   the last run.
 
 It skips Office lock files, temporary files, `Thumbs.db`, `desktop.ini`, and system and
-version-control folders (`.git`, `$RECYCLE.BIN` and similar). It doesn't follow shortcuts,
+version-control folders (`.git`, `$RECYCLE.BIN`, OneNote's recycle bin and similar). It doesn't follow shortcuts,
 symbolic links or junctions. It doesn't read files that are "online only" in OneDrive or Dropbox,
 and it refuses Google Drive folders, because reading those would download them.
 
@@ -45,6 +45,14 @@ For each file in a synced folder:
 - its **path, size, modification time and SHA-256 hash**;
 - **the file itself**, only when Binaly asks for it. Binaly asks for files up to 100 MB that
   aren't already stored. Larger files are only recorded by path and hash.
+
+**OneNote notebooks** are the one exception to "the file itself". Nothing reads OneNote's own
+file format well, so where the OneNote desktop app is installed, Binaly Sync asks it to export
+each new or changed section (`.one`) to PDF, and sends that PDF in place of the section, with
+the section's own path. To do that it copies the section into its own folder on this computer
+and opens the copy: the lab's notebooks are never opened or written to, and nothing is added to
+the person's notebook list. The PDF is deleted once Binaly has it. Without the OneNote app,
+sections are only recorded by path and hash.
 
 Each upload is checked by the server, however it arrived: it hashes what landed in staging and
 refuses anything that doesn't match the hash this computer reported. Only then is the file

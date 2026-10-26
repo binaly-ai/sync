@@ -76,6 +76,44 @@ func (d *DB) CachedHash(key string, size, mtimeNs int64) (string, bool) {
 	return h.SHA256, ok
 }
 
+// Rendition is a OneNote section's PDF export, valid while the section's size and mtime are
+// unchanged: the PDF's hash and size, or Refused when OneNote couldn't export that version
+// (a password-protected or damaged section), so it isn't tried again until it changes.
+type Rendition struct {
+	Size    int64  `json:"s"`
+	MtimeNs int64  `json:"m"`
+	SHA256  string `json:"h,omitempty"`
+	PDFSize int64  `json:"ps,omitempty"`
+	Refused bool   `json:"r,omitempty"`
+}
+
+func renditionKey(key string) []byte { return []byte("pdf|" + key) }
+
+// CachedRendition returns a section's export if the section hasn't changed since.
+func (d *DB) CachedRendition(key string, size, mtimeNs int64) (Rendition, bool) {
+	var r Rendition
+	ok := false
+	_ = d.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketHashes).Get(renditionKey(key))
+		if v != nil && json.Unmarshal(v, &r) == nil && r.Size == size && r.MtimeNs == mtimeNs {
+			ok = true
+		}
+		return nil
+	})
+	return r, ok
+}
+
+// PutRendition records a section's export (or that OneNote refused it).
+func (d *DB) PutRendition(key string, r Rendition) error {
+	v, _ := json.Marshal(r)
+	return d.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketHashes).Put(renditionKey(key), v) })
+}
+
+// DropRendition forgets a section's export, so the next run exports it again.
+func (d *DB) DropRendition(key string) error {
+	return d.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketHashes).Delete(renditionKey(key)) })
+}
+
 // PutHashes stores freshly computed hashes.
 func (d *DB) PutHashes(entries map[string]Hash) error {
 	return d.db.Update(func(tx *bolt.Tx) error {

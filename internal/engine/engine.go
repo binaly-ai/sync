@@ -19,6 +19,7 @@ import (
 	"github.com/binaly-ai/sync/internal/auth"
 	"github.com/binaly-ai/sync/internal/config"
 	"github.com/binaly-ai/sync/internal/creds"
+	"github.com/binaly-ai/sync/internal/onenote"
 	"github.com/binaly-ai/sync/internal/pathx"
 	"github.com/binaly-ai/sync/internal/runlog"
 	"github.com/binaly-ai/sync/internal/scan"
@@ -71,6 +72,26 @@ type Engine struct {
 	directDownUntil time.Time
 	// watch: each account's folders to watch, from its last successful check-in.
 	watch map[string][]WatchFolder
+	// sectionsUnread: OneNote sections this run found with no OneNote app to export them.
+	sectionsUnread int
+
+	// OneNote, when set, exports OneNote sections to PDF (onenote.Exporter); without it a
+	// section is reported as it is, and the server only registers it. Renditions is Sync's
+	// own folder for the exported PDFs while they wait to upload.
+	OneNote    Renderer
+	Renditions string
+}
+
+// Renderer exports one OneNote section to a PDF that doesn't exist yet.
+type Renderer interface {
+	Export(ctx context.Context, section, pdf string) error
+}
+
+// rendered is a section's PDF: what is reported and uploaded in place of the section.
+type rendered struct {
+	sha  string
+	size int64
+	file string
 }
 
 // WatchList returns the folders to watch: every folder of every signed-in workspace whose
@@ -101,10 +122,12 @@ func (e *Engine) WatchList() []WatchFolder {
 
 // Status is what the tray and the status page show.
 type Status struct {
-	Running    bool              `json:"running"`
-	Activity   string            `json:"activity"`
-	LastRunAt  string            `json:"lastRunAt,omitempty"`
-	LastLog    string            `json:"lastLog,omitempty"`
+	Running   bool   `json:"running"`
+	Activity  string `json:"activity"`
+	LastRunAt string `json:"lastRunAt,omitempty"`
+	LastLog   string `json:"lastLog,omitempty"`
+	// Notice: something about this computer worth knowing, from the last full run.
+	Notice     string            `json:"notice,omitempty"`
 	Workspaces []WorkspaceStatus `json:"workspaces"`
 	Uploading  struct {
 		Files int   `json:"files"`
@@ -231,17 +254,17 @@ func (e *Engine) Hello(ctx context.Context, a config.Account) (*api.HelloOut, er
 
 // one workspace's view of one folder during a run
 type target struct {
-	acct    config.Account
-	client  *api.Client
-	policy  api.Policy
-	folder  api.Folder
-	rules   scan.Rules
-	full    bool
-	scanID  string
-	first   bool
-	report  map[string]state.Reported // what it was told before this run
-	seen    map[string]bool
-	ws      *WorkspaceStatus
+	acct   config.Account
+	client *api.Client
+	policy api.Policy
+	folder api.Folder
+	rules  scan.Rules
+	full   bool
+	scanID string
+	first  bool
+	report map[string]state.Reported // what it was told before this run
+	seen   map[string]bool
+	ws     *WorkspaceStatus
 	// failed: a report in this walk failed, so the server didn't see every file and the walk
 	// must not end with deletions or close the scan (which marks unseen files gone).
 	failed bool
@@ -255,6 +278,8 @@ type job struct {
 	url    string // the server's relay
 	stage  string
 	direct upload.Target
+	// pdf: the section's PDF export, uploaded in place of the section itself.
+	pdf *rendered
 }
 
 // Run performs one sync across every signed-in workspace.
@@ -273,11 +298,18 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 		return errors.New("a sync is already running")
 	}
 	e.status.Running = true
+	e.sectionsUnread = 0
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()
 		e.status.Running = false
 		e.status.LastRunAt = time.Now().Format(time.RFC3339)
+		if len(opt.Folders) == 0 && ctx.Err() == nil { // a full run counts every section
+			e.status.Notice = ""
+			if n := e.sectionsUnread; n > 0 {
+				e.status.Notice = fmt.Sprintf("%d OneNote section%s can't be read: install the OneNote desktop app on this computer to include OneNote notebooks.", n, plural(n))
+			}
+		}
 		e.mu.Unlock()
 	}()
 
@@ -517,11 +549,23 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		// Hash what the cache doesn't know (once, whatever the number of workspaces).
 		hashes := map[string]string{}
 		fresh := map[string]state.Hash{}
+		pdfs := map[string]*rendered{}
 		for _, en := range chunk {
 			if ctx.Err() != nil {
 				return
 			}
 			key := pathx.Key(pathx.Canonical(en.Path))
+			if onenote.IsSection(en.Path) {
+				if e.OneNote == nil {
+					e.noteSectionUnread()
+				} else if r, err := e.rendition(ctx, key, en, lg); err == nil {
+					hashes[key], pdfs[key] = r.sha, r
+					continue
+				} else if errors.Is(err, scan.ErrChanging) || ctx.Err() != nil {
+					continue // next run
+				}
+				// Refused by OneNote: reported as it is, which the server only registers.
+			}
 			if sha, ok := e.State.CachedHash(key, en.Size, en.ModTime.UnixNano()); ok {
 				hashes[key] = sha
 				continue
@@ -555,7 +599,11 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 				if !t.full && had && prev.Uploaded && prev.SHA256 == sha && prev.Size == en.Size && prev.MtimeNs == en.ModTime.UnixNano() {
 					continue // unchanged and fully synced: nothing to say
 				}
-				files = append(files, api.FileReport{Path: p, Size: en.Size, Mtime: en.ModTime.UTC().Format(time.RFC3339Nano), SHA256: sha, Preview: scan.Preview(en.Path, t.policy)})
+				fr := api.FileReport{Path: p, Size: en.Size, Mtime: en.ModTime.UTC().Format(time.RFC3339Nano), SHA256: sha, Preview: scan.Preview(en.Path, t.policy)}
+				if r := pdfs[key]; r != nil {
+					fr.Size, fr.Preview, fr.Rendition = r.size, "", "pdf"
+				}
+				files = append(files, fr)
 				byPath[key] = en
 			}
 			if len(files) == 0 && !(t.full && t.first) {
@@ -572,7 +620,7 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 				continue
 			}
 			t.first = false
-			e.applyResults(ctx, t, out, byPath, hashes, jobs, lg)
+			e.applyResults(ctx, t, out, byPath, hashes, pdfs, jobs, lg)
 		}
 	}
 
@@ -629,7 +677,7 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 	}
 }
 
-func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut, byPath map[string]scan.Entry, hashes map[string]string, jobs chan<- job, lg *runlog.Log) {
+func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut, byPath map[string]scan.Entry, hashes map[string]string, pdfs map[string]*rendered, jobs chan<- job, lg *runlog.Log) {
 	rec := map[string]state.Reported{}
 	for _, r := range out.Results {
 		key := pathx.Key(r.Path)
@@ -646,9 +694,12 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 			e.status.Uploading.Bytes += en.Size
 			e.mu.Unlock()
 			jobs <- job{t: t, entry: en, key: key, sha: hashes[key], url: r.UploadURL, stage: r.StagingKey,
-				direct: upload.Target{URL: r.DirectURL, Headers: r.DirectHeaders}}
+				direct: upload.Target{URL: r.DirectURL, Headers: r.DirectHeaders}, pdf: pdfs[key]}
 		case "register", "known":
 			lg.Event(r.Action, map[string]any{"path": r.Path, "workspace": t.ws.Name})
+			if pdf := pdfs[key]; pdf != nil {
+				os.Remove(pdf.file) // the server has it, or doesn't want it
+			}
 		default:
 			lg.Event(r.Action, map[string]any{"path": r.Path, "reason": r.Reason, "workspace": t.ws.Name})
 		}
@@ -728,6 +779,9 @@ func (e *Engine) uploadOne(ctx context.Context, j job, lim *upload.Limiter) erro
 	if err := j.t.client.Commit(ctx, j.t.acct.MachineID, j.stage, p, j.sha); err != nil {
 		return err
 	}
+	if j.pdf != nil {
+		os.Remove(j.pdf.file)
+	}
 	return e.State.PutReported(j.t.acct.Key(), j.t.folder.ID, map[string]state.Reported{
 		j.key: {Path: p, Size: j.entry.Size, MtimeNs: j.entry.ModTime.UnixNano(), SHA256: j.sha, Uploaded: true},
 	})
@@ -739,13 +793,22 @@ func (e *Engine) uploadOne(ctx context.Context, j job, lim *upload.Limiter) erro
 // (a firewall that allows only binaly.ai), the relay takes over for an hour before direct is
 // tried again; any other direct failure falls back for that one file.
 func (e *Engine) put(ctx context.Context, j job, lim *upload.Limiter) error {
+	src, size := j.entry.Path, j.entry.Size
+	if j.pdf != nil {
+		src, size = j.pdf.file, j.pdf.size
+		if _, err := os.Stat(src); err != nil {
+			// The export was cleaned up after an earlier upload; export again next run.
+			_ = e.State.DropRendition(j.key)
+			return fmt.Errorf("%s: its PDF export is gone; it is exported again next run", filepath.Base(j.entry.Path))
+		}
+	}
 	e.mu.Lock()
 	directOK := j.direct.URL != "" && time.Now().After(e.directDownUntil)
 	e.mu.Unlock()
 	if directOK {
 		d := j.direct
 		d.Attempts = 2
-		err := upload.Put(ctx, d, j.entry.Path, j.entry.Size, lim)
+		err := upload.Put(ctx, d, src, size, lim)
 		if err == nil || ctx.Err() != nil {
 			return err
 		}
@@ -756,7 +819,7 @@ func (e *Engine) put(ctx context.Context, j job, lim *upload.Limiter) error {
 			e.mu.Unlock()
 		}
 	}
-	return upload.Put(ctx, upload.Target{URL: j.url}, j.entry.Path, j.entry.Size, lim)
+	return upload.Put(ctx, upload.Target{URL: j.url}, src, size, lim)
 }
 
 // unsyncedSiblings lists folders next to synced ones that nothing syncs ("Not syncing" in the app).
@@ -790,4 +853,70 @@ func unsyncedSiblings(byFolder map[string][]*target) []string {
 		out = out[:200]
 	}
 	return out
+}
+
+// rendition returns a OneNote section's PDF export: the cached one while the section is
+// unchanged, otherwise a fresh export by OneNote. The PDF is kept in Sync's own folder until
+// the server has it.
+func (e *Engine) rendition(ctx context.Context, key string, en scan.Entry, lg *runlog.Log) (*rendered, error) {
+	mt := en.ModTime.UnixNano()
+	if r, ok := e.State.CachedRendition(key, en.Size, mt); ok {
+		if r.Refused {
+			return nil, errors.New("OneNote refused this section")
+		}
+		return &rendered{sha: r.SHA256, size: r.PDFSize, file: filepath.Join(e.Renditions, r.SHA256+".pdf")}, nil
+	}
+	if err := os.MkdirAll(e.Renditions, 0o700); err != nil {
+		return nil, err
+	}
+	e.setActivity("Exporting OneNote section %s", filepath.Base(en.Path))
+	tmp := filepath.Join(e.Renditions, fmt.Sprintf("export-%d.pdf", time.Now().UnixNano()))
+	if err := e.OneNote.Export(ctx, en.Path, tmp); err != nil {
+		os.Remove(tmp)
+		lg.Event("onenote-failed", map[string]any{"path": en.Path, "error": err.Error()})
+		if onenote.Refused(err) {
+			_ = e.State.PutRendition(key, state.Rendition{Size: en.Size, MtimeNs: mt, Refused: true})
+		}
+		return nil, err
+	}
+	// Someone wrote to the section while it was exported: try again next run.
+	if fi, err := os.Stat(en.Path); err != nil || fi.Size() != en.Size || !fi.ModTime().Equal(en.ModTime) {
+		os.Remove(tmp)
+		return nil, scan.ErrChanging
+	}
+	fi, err := os.Stat(tmp)
+	if err != nil {
+		return nil, err
+	}
+	sha, err := scan.Hash(scan.Entry{Path: tmp, Size: fi.Size(), ModTime: fi.ModTime()})
+	if err != nil {
+		os.Remove(tmp)
+		return nil, err
+	}
+	final := filepath.Join(e.Renditions, sha+".pdf")
+	if err := os.Rename(tmp, final); err != nil {
+		os.Remove(tmp)
+		if _, statErr := os.Stat(final); statErr != nil {
+			return nil, err
+		}
+	}
+	r := state.Rendition{Size: en.Size, MtimeNs: mt, SHA256: sha, PDFSize: fi.Size()}
+	if err := e.State.PutRendition(key, r); err != nil {
+		return nil, err
+	}
+	lg.Event("onenote-exported", map[string]any{"path": en.Path, "pdfBytes": fi.Size()})
+	return &rendered{sha: sha, size: fi.Size(), file: final}, nil
+}
+
+func (e *Engine) noteSectionUnread() {
+	e.mu.Lock()
+	e.sectionsUnread++
+	e.mu.Unlock()
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }

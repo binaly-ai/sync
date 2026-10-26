@@ -24,6 +24,7 @@ import (
 	"github.com/binaly-ai/sync/internal/config"
 	"github.com/binaly-ai/sync/internal/creds"
 	"github.com/binaly-ai/sync/internal/engine"
+	"github.com/binaly-ai/sync/internal/onenote"
 	"github.com/binaly-ai/sync/internal/pathx"
 	"github.com/binaly-ai/sync/internal/runlog"
 	"github.com/binaly-ai/sync/internal/scan"
@@ -116,8 +117,20 @@ func open() (*engine.Engine, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("another Binaly Sync is running (close it, or use its tray menu): %w", err)
 	}
-	e := &engine.Engine{Cfg: cfg, State: st, Creds: creds.System(), Version: Version}
-	return e, func() { st.Close() }, nil
+	e := &engine.Engine{Cfg: cfg, State: st, Creds: creds.System(), Version: Version,
+		Renditions: filepath.Join(config.Dir(), "onenote", "pdf")}
+	// OneNote sections are sent as PDFs its own app exports, where the desktop app is installed.
+	var x *onenote.Exporter
+	if onenote.Available() {
+		x = onenote.New(filepath.Join(config.Dir(), "onenote", "work"))
+		e.OneNote = x
+	}
+	return e, func() {
+		if x != nil {
+			x.Close()
+		}
+		st.Close()
+	}, nil
 }
 
 func openBrowser(url string) error {

@@ -134,6 +134,8 @@ function renderStatus(s) {
   $("activity").textContent = !signedIn ? "" : pausedText || (st.running ? st.activity : (st.lastRunAt ? `Up to date. Last sync ${new Date(st.lastRunAt).toLocaleTimeString()}` : st.activity || ""));
   // Paused: only Resume (which also syncs right away). Running: Pause, and Sync now to sync
   // without waiting for the next one. Never a button that can't do anything.
+  $("notice").hidden = !st.notice;
+  $("notice").textContent = st.notice || "";
   $("btn-pause").textContent = s.pausedUntil ? "Resume" : "Pause";
   $("btn-pause").className = s.pausedUntil ? "primary" : "quiet";
   $("btn-sync").hidden = !!s.pausedUntil;

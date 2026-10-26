@@ -28,6 +28,10 @@ folder, and it syncs that folder about half a minute after the changes stop. It 
 through every folder in full every 15 minutes, in case a change notice was missed (network drives
 drop them). Settings, "Check folders every", changes that interval on this computer.
 
+OneNote notebooks: where the OneNote desktop app is installed, each new or changed section is
+exported to PDF by OneNote itself and sent in place of the `.one` file, which nothing else
+reads well. Without the app, Binaly Sync says how many sections it can't include.
+
 It keeps itself up to date: it checks this repository's releases every few hours and installs a
 new version when one appears, stopping a running sync first (the next sync picks up where it
 left off). Settings can switch that to "tell me, don't install".
