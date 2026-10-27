@@ -5,6 +5,8 @@
 //   - per workspace and folder, what that workspace was last told about each path. Comparing
 //     a walk against it gives new, changed and deleted files, so a normal run reports only
 //     changes.
+//   - each file's embedded metadata, and when each content's text was last sent, so neither
+//     is read again while nothing changed.
 //
 // Losing this file costs a re-hash and one full report; nothing on the server is harmed.
 package state
@@ -112,6 +114,58 @@ func (d *DB) PutRendition(key string, r Rendition) error {
 // DropRendition forgets a section's export, so the next run exports it again.
 func (d *DB) DropRendition(key string) error {
 	return d.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketHashes).Delete(renditionKey(key)) })
+}
+
+// FileMeta is a file's embedded metadata, cached while its size and mtime are unchanged, so a
+// full report doesn't open every document again. Meta is the JSON the server receives, kept
+// opaque here; empty means the file says nothing about itself.
+type FileMeta struct {
+	Size    int64           `json:"s"`
+	MtimeNs int64           `json:"m"`
+	Meta    json.RawMessage `json:"j,omitempty"`
+}
+
+func metaKey(key string) []byte { return []byte("meta|" + key) }
+
+// CachedMeta returns a file's metadata if the file hasn't changed since it was read.
+func (d *DB) CachedMeta(key string, size, mtimeNs int64) (json.RawMessage, bool) {
+	var m FileMeta
+	ok := false
+	_ = d.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketHashes).Get(metaKey(key))
+		if v != nil && json.Unmarshal(v, &m) == nil && m.Size == size && m.MtimeNs == mtimeNs {
+			ok = true
+		}
+		return nil
+	})
+	return m.Meta, ok
+}
+
+// PutMeta records a file's metadata (or that it has none).
+func (d *DB) PutMeta(key string, m FileMeta) error {
+	v, _ := json.Marshal(m)
+	return d.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketHashes).Put(metaKey(key), v) })
+}
+
+func extractKey(sha string) []byte { return []byte("extract|" + sha) }
+
+// ExtractSent returns when a content's text was last sent to a workspace's server.
+func (d *DB) ExtractSent(account, sha string) time.Time {
+	var t time.Time
+	_ = d.db.View(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(bucketMeta).Get(append([]byte(account+"|"), extractKey(sha)...)); v != nil {
+			t, _ = time.Parse(time.RFC3339, string(v))
+		}
+		return nil
+	})
+	return t
+}
+
+// SetExtractSent records that a content's text was sent.
+func (d *DB) SetExtractSent(account, sha string, at time.Time) error {
+	return d.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketMeta).Put(append([]byte(account+"|"), extractKey(sha)...), []byte(at.UTC().Format(time.RFC3339)))
+	})
 }
 
 // PutHashes stores freshly computed hashes.

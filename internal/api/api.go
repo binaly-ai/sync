@@ -242,6 +242,81 @@ type FileReport struct {
 	// Rendition "pdf": a OneNote section, sent as the PDF its OneNote app exported. Size and
 	// SHA256 are the PDF's; Path and Mtime stay the section's.
 	Rendition string `json:"rendition,omitempty"`
+	// Ctime is the file's created time. A hint only: copying a file resets it.
+	Ctime string `json:"ctime,omitempty"`
+	// Meta is what the file says about itself, where its format says anything.
+	Meta *FileMeta `json:"meta,omitempty"`
+}
+
+// FileMeta is a file's embedded metadata: PDF document info, Office document properties,
+// a photo's capture time, a OneNote section's pages. Every field is optional.
+type FileMeta struct {
+	Title          string `json:"title,omitempty"`
+	Author         string `json:"author,omitempty"`
+	LastModifiedBy string `json:"lastModifiedBy,omitempty"`
+	Created        string `json:"created,omitempty"`
+	Modified       string `json:"modified,omitempty"`
+	DOI            string `json:"doi,omitempty"`
+	Captured       string `json:"captured,omitempty"`
+	Pages          int    `json:"pages,omitempty"`
+}
+
+// Empty reports whether m says nothing.
+func (m *FileMeta) Empty() bool { return m == nil || *m == FileMeta{} }
+
+// ExtractPage is one page of a file's text: a PDF page, a slide, a sheet, a OneNote page.
+type ExtractPage struct {
+	N        int    `json:"n"`
+	Text     string `json:"text"`
+	Chars    int    `json:"chars"`
+	Images   int    `json:"images"`
+	Hash     string `json:"hash"`
+	Title    string `json:"title,omitempty"`
+	Created  string `json:"created,omitempty"`
+	Modified string `json:"modified,omitempty"`
+	Author   string `json:"author,omitempty"`
+}
+
+// ExtractIn is the text of one content, sent once when the server asks (wantExtract).
+type ExtractIn struct {
+	MachineID string        `json:"machineId"`
+	SHA256    string        `json:"sha256"`
+	Path      string        `json:"path"`
+	Kind      string        `json:"kind"` // pdf | onenote | docx | pptx | xlsx | text
+	Pages     []ExtractPage `json:"pages"`
+	Truncated bool          `json:"truncated,omitempty"`
+	// Error says why there is no text (a damaged or password-protected file), so the server
+	// can stop asking for this content.
+	Error string `json:"error,omitempty"`
+}
+
+// Extract sends a content's text.
+func (c *Client) Extract(ctx context.Context, in ExtractIn) error {
+	return c.do(ctx, "POST", "/sync/v1/extract", in, nil)
+}
+
+// Assistant is what the "Connect your AI assistant" page shows, from the server so its text
+// can't drift from app.binaly.ai/sync.
+type Assistant struct {
+	ConnectorURL string `json:"connectorUrl"`
+	// Assistants: how to add the connector, per AI assistant (Claude, ChatGPT, ...).
+	Assistants []struct {
+		Name  string   `json:"name"`
+		Steps []string `json:"steps"`
+	} `json:"assistants"`
+	AfterConnect string `json:"afterConnect"`
+	// Processing: the scheduled task that turns synced files into notes.
+	Processing struct {
+		Lead        string `json:"lead"`
+		SetupPrompt string `json:"setupPrompt"`
+	} `json:"processing"`
+	DocsURL string `json:"docsUrl"`
+}
+
+// GetAssistant fetches the connect-your-AI-assistant instructions. Older servers answer 404.
+func (c *Client) GetAssistant(ctx context.Context) (*Assistant, error) {
+	var out Assistant
+	return &out, c.do(ctx, "GET", "/sync/v1/assistant", nil, &out)
 }
 
 // ReportIn is one batch for one folder.
@@ -269,6 +344,9 @@ type FileResult struct {
 	DirectHeaders map[string]string `json:"directHeaders"`
 	Processed     bool              `json:"processed"`
 	Reason        string            `json:"reason"`
+	// WantExtract: the server has no text for this content yet; send it (POST /sync/v1/extract).
+	// Older servers never ask.
+	WantExtract bool `json:"wantExtract"`
 }
 
 // ReportOut is the answer to a batch.

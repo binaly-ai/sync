@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/binaly-ai/sync/internal/auth"
 	"github.com/binaly-ai/sync/internal/config"
 	"github.com/binaly-ai/sync/internal/creds"
+	"github.com/binaly-ai/sync/internal/extract"
 	"github.com/binaly-ai/sync/internal/onenote"
 	"github.com/binaly-ai/sync/internal/pathx"
 	"github.com/binaly-ai/sync/internal/runlog"
@@ -35,6 +37,9 @@ const (
 	fullEvery = 24 * time.Hour
 	// How often a run refreshes the bar from the server while it reports and uploads.
 	progressRefresh = 15 * time.Second
+	// A content's text, once sent, isn't sent again for this long even if the server asks:
+	// a server that keeps asking is failing to keep it, and resending every run won't help.
+	extractResend = 24 * time.Hour
 )
 
 // Options shape one run.
@@ -87,11 +92,29 @@ type Renderer interface {
 	Export(ctx context.Context, section, pdf string) error
 }
 
+// PageReader is a Renderer that also reads a section's pages while exporting it
+// (onenote.Exporter): titles, dates, authors and text, sent as the section's extract.
+type PageReader interface {
+	ExportPages(ctx context.Context, section, pdf string) ([]onenote.RawPage, error)
+}
+
 // rendered is a section's PDF: what is reported and uploaded in place of the section.
 type rendered struct {
 	sha  string
 	size int64
 	file string
+}
+
+// sectionExtract is what a section's pages gave at export time, kept in Sync's folder beside
+// the PDF until the server has it.
+type sectionExtract struct {
+	Meta  *api.FileMeta     `json:"meta,omitempty"`
+	Pages []api.ExtractPage `json:"pages"`
+}
+
+// extractFile is where a section's pages wait for the server to ask for them.
+func (e *Engine) extractFile(pdfSHA string) string {
+	return filepath.Join(e.Renditions, pdfSHA+".pages.json")
 }
 
 // WatchList returns the folders to watch: every folder of every signed-in workspace whose
@@ -280,6 +303,9 @@ type job struct {
 	direct upload.Target
 	// pdf: the section's PDF export, uploaded in place of the section itself.
 	pdf *rendered
+	// extract: once uploaded, send the content's text too. extractOnly: nothing to upload,
+	// only the text to send (the server already has the bytes, or keeps only the path).
+	extract, extractOnly bool
 }
 
 // Run performs one sync across every signed-in workspace.
@@ -416,6 +442,12 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				if j.extractOnly {
+					if ctx.Err() == nil {
+						e.sendExtract(ctx, j, lg)
+					}
+					continue
+				}
 				if ctx.Err() != nil {
 					// Paused or quitting: drop the rest quietly. Each file is still marked as
 					// not uploaded, so the next run sends it.
@@ -426,6 +458,9 @@ func (e *Engine) Run(ctx context.Context, opt Options) error {
 					continue
 				}
 				err := e.uploadOne(ctx, j, lim)
+				if err == nil && j.extract {
+					e.sendExtract(ctx, j, lg)
+				}
 				e.mu.Lock()
 				e.status.Uploading.Files--
 				e.status.Uploading.Bytes -= j.entry.Size
@@ -563,6 +598,7 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 		hashes := map[string]string{}
 		fresh := map[string]state.Hash{}
 		pdfs := map[string]*rendered{}
+		metas := map[string]*api.FileMeta{}
 		for _, en := range chunk {
 			if ctx.Err() != nil {
 				return
@@ -573,6 +609,7 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 					e.noteSectionUnread()
 				} else if r, err := e.rendition(ctx, key, en, lg); err == nil {
 					hashes[key], pdfs[key] = r.sha, r
+					metas[key] = e.cachedMeta(key, en)
 					continue
 				} else if errors.Is(err, scan.ErrChanging) || ctx.Err() != nil {
 					continue // next run
@@ -592,6 +629,12 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 			fresh[key] = state.Hash{Size: en.Size, MtimeNs: en.ModTime.UnixNano(), SHA256: sha}
 		}
 		_ = e.State.PutHashes(fresh)
+		for _, en := range chunk {
+			key := pathx.Key(pathx.Canonical(en.Path))
+			if _, ok := hashes[key]; ok && pdfs[key] == nil && extract.HasMeta(en.Path) && ctx.Err() == nil {
+				metas[key] = e.fileMeta(key, en, lg)
+			}
+		}
 
 		for _, t := range targets {
 			var files []api.FileReport
@@ -612,7 +655,10 @@ func (e *Engine) syncFolder(ctx context.Context, root string, entries []scan.Ent
 				if !t.full && had && prev.Uploaded && prev.SHA256 == sha && prev.Size == en.Size && prev.MtimeNs == en.ModTime.UnixNano() {
 					continue // unchanged and fully synced: nothing to say
 				}
-				fr := api.FileReport{Path: p, Size: en.Size, Mtime: en.ModTime.UTC().Format(time.RFC3339Nano), SHA256: sha, Preview: scan.Preview(en.Path, t.policy)}
+				fr := api.FileReport{Path: p, Size: en.Size, Mtime: en.ModTime.UTC().Format(time.RFC3339Nano), SHA256: sha, Preview: scan.Preview(en.Path, t.policy), Meta: metas[key]}
+				if !en.Created.IsZero() {
+					fr.Ctime = en.Created.UTC().Format(time.RFC3339Nano)
+				}
 				if r := pdfs[key]; r != nil {
 					fr.Size, fr.Preview, fr.Rendition = r.size, "", "pdf"
 				}
@@ -699,6 +745,7 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 			continue
 		}
 		entry := state.Reported{Path: r.Path, Size: en.Size, MtimeNs: en.ModTime.UnixNano(), SHA256: hashes[key], Uploaded: true}
+		wantText := r.WantExtract && time.Since(e.State.ExtractSent(t.acct.Key(), hashes[key])) > extractResend
 		switch r.Action {
 		case "upload":
 			entry.Uploaded = false // until the commit lands
@@ -707,11 +754,14 @@ func (e *Engine) applyResults(ctx context.Context, t *target, out *api.ReportOut
 			e.status.Uploading.Bytes += en.Size
 			e.mu.Unlock()
 			jobs <- job{t: t, entry: en, key: key, sha: hashes[key], url: r.UploadURL, stage: r.StagingKey,
-				direct: upload.Target{URL: r.DirectURL, Headers: r.DirectHeaders}, pdf: pdfs[key]}
+				direct: upload.Target{URL: r.DirectURL, Headers: r.DirectHeaders}, pdf: pdfs[key], extract: wantText}
 		case "register", "known":
 			lg.Event(r.Action, map[string]any{"path": r.Path, "workspace": t.ws.Name})
 			if pdf := pdfs[key]; pdf != nil {
 				os.Remove(pdf.file) // the server has it, or doesn't want it
+			}
+			if wantText {
+				jobs <- job{t: t, entry: en, key: key, sha: hashes[key], pdf: pdfs[key], extractOnly: true}
 			}
 		default:
 			lg.Event(r.Action, map[string]any{"path": r.Path, "reason": r.Reason, "workspace": t.ws.Name})
@@ -884,7 +934,14 @@ func (e *Engine) rendition(ctx context.Context, key string, en scan.Entry, lg *r
 	}
 	e.setActivity("Exporting OneNote section %s", filepath.Base(en.Path))
 	tmp := filepath.Join(e.Renditions, fmt.Sprintf("export-%d.pdf", time.Now().UnixNano()))
-	if err := e.OneNote.Export(ctx, en.Path, tmp); err != nil {
+	var pages []onenote.RawPage
+	var err error
+	if pr, ok := e.OneNote.(PageReader); ok {
+		pages, err = pr.ExportPages(ctx, en.Path, tmp)
+	} else {
+		err = e.OneNote.Export(ctx, en.Path, tmp)
+	}
+	if err != nil {
 		os.Remove(tmp)
 		lg.Event("onenote-failed", map[string]any{"path": en.Path, "error": err.Error()})
 		if onenote.Refused(err) {
@@ -913,11 +970,22 @@ func (e *Engine) rendition(ctx context.Context, key string, en scan.Entry, lg *r
 			return nil, err
 		}
 	}
+	if pages != nil {
+		// The pages wait beside the PDF until the server asks for them (wantExtract); the
+		// section's metadata goes with every report of this version of it.
+		se := sectionFromPages(en.Path, pages)
+		if raw, err := json.Marshal(se); err == nil {
+			_ = os.WriteFile(e.extractFile(sha), raw, 0o600)
+		}
+		if raw, err := json.Marshal(se.Meta); err == nil {
+			_ = e.State.PutMeta(key, state.FileMeta{Size: en.Size, MtimeNs: mt, Meta: raw})
+		}
+	}
 	r := state.Rendition{Size: en.Size, MtimeNs: mt, SHA256: sha, PDFSize: fi.Size()}
 	if err := e.State.PutRendition(key, r); err != nil {
 		return nil, err
 	}
-	lg.Event("onenote-exported", map[string]any{"path": en.Path, "pdfBytes": fi.Size()})
+	lg.Event("onenote-exported", map[string]any{"path": en.Path, "pdfBytes": fi.Size(), "pages": len(pages)})
 	return &rendered{sha: sha, size: fi.Size(), file: final}, nil
 }
 

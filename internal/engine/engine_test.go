@@ -29,21 +29,24 @@ import (
 type fakeServer struct {
 	mu       sync.Mutex
 	folder   string
-	stored   map[string][]byte   // sha -> bytes
-	reported map[string]string   // path key -> sha (live)
-	gone     map[string]bool     // path key -> gone
+	stored   map[string][]byte // sha -> bytes
+	reported map[string]string // path key -> sha (live)
+	gone     map[string]bool   // path key -> gone
 	reports  []api.ReportIn
 	srv      *httptest.Server
 	// onReport, when set, runs after each report is stored (e.g. to pause the run mid-scan).
 	onReport func(n int)
 	// direct: "" offers no direct URL, "ok" a working one, "down" one nothing listens on.
-	direct                 string
-	directPuts, relayPuts  int
+	direct                string
+	directPuts, relayPuts int
 	// notDue: hello says another machine walked the folder moments ago.
 	notDue bool
 	// failReport, when set, answers report number n (counting from 1) with this status instead.
-	failReport func(n int) int
+	failReport  func(n int) int
 	reportCalls int
+	// wantExtract: base names whose text the server asks for; extracts: what arrived.
+	wantExtract map[string]bool
+	extracts    []api.ExtractIn
 }
 
 func newFake(t *testing.T, folder string) *fakeServer {
@@ -65,8 +68,8 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/sync/v1/hello":
 		reply(map[string]any{
 			"machineId": "m_test", "workspace": map[string]string{"id": "w1", "name": "Test"},
-			"policy":    api.DefaultPolicy,
-			"folders":   []map[string]any{{"id": "f1", "path": f.folder, "exclusions": []string{}, "scanDue": !f.notDue}},
+			"policy":  api.DefaultPolicy,
+			"folders": []map[string]any{{"id": "f1", "path": f.folder, "exclusions": []string{}, "scanDue": !f.notDue}},
 		})
 	case r.URL.Path == "/sync/v1/report":
 		f.reportCalls++
@@ -102,6 +105,7 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 					res.DirectURL = "http://127.0.0.1:1/direct/" + fr.SHA256
 				}
 			}
+			res.WantExtract = f.wantExtract[filepath.Base(fr.Path)]
 			results = append(results, res)
 		}
 		for _, p := range in.Deleted {
@@ -134,6 +138,11 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.stored[in.SHA256] = b
 		reply(map[string]any{"ok": true})
+	case r.URL.Path == "/sync/v1/extract":
+		var in api.ExtractIn
+		json.NewDecoder(r.Body).Decode(&in)
+		f.extracts = append(f.extracts, in)
+		reply(map[string]any{"ok": true, "pages": len(in.Pages)})
 	case r.URL.Path == "/sync/v1/status":
 		reply(map[string]any{"ok": true})
 	case r.URL.Path == "/sync/v1/progress":

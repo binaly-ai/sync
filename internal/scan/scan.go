@@ -27,6 +27,9 @@ type Entry struct {
 	Path    string
 	Size    int64
 	ModTime time.Time
+	// Created is the file's creation time where the file system keeps one (zero otherwise).
+	// Copying a file resets it, so it is a hint, never a fact.
+	Created time.Time
 }
 
 // Stats counts what a walk left out.
@@ -173,7 +176,8 @@ func Walk(root string, r Rules) ([]Entry, Stats, error) {
 			st.OnlineOnly++
 			return nil
 		}
-		out = append(out, Entry{Path: p, Size: fi.Size(), ModTime: fi.ModTime()})
+		ct, _ := created(fi)
+		out = append(out, Entry{Path: p, Size: fi.Size(), ModTime: fi.ModTime(), Created: ct})
 		return nil
 	})
 	if err != nil {

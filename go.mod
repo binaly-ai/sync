@@ -7,6 +7,7 @@ require (
 	github.com/danieljoos/wincred v1.2.3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
+	github.com/ledongthuc/pdf v0.0.0-20261020125853-5e46805f718e
 	github.com/sqweek/dialog v0.0.0-20260123140253-64c163d53aac
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/sys v0.49.0
