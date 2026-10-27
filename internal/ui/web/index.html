@@ -12,6 +12,7 @@
   <div class="brand"><img src="icon.png" alt="" width="28" height="28"><span>Binaly Sync</span></div>
   <nav>
     <a data-nav="status">Status</a>
+    <a data-nav="assistant">AI assistant</a>
     <a data-nav="settings">Settings</a>
     <a data-nav="about">About</a>
   </nav>
@@ -44,6 +45,7 @@
     <h1>Before anything is sent</h1>
     <p class="muted">This is what Binaly Sync found. Nothing has left this computer.</p>
     <div id="preview" class="card"><p class="muted">Looking through the folder...</p></div>
+    <div class="note-box sensitive"><b>Before you start syncing.</b> Everything in a synced folder becomes notes that every member's AI assistant can read back. Leave out evaluations of people, medical or HR records, and peer reviews you're writing for a journal. Binaly holds back what it recognizes as sensitive and lists it on the Binaly Sync page for you to decide, but it can't recognize everything.</div>
     <div id="preview-actions" class="actions" hidden>
       <label id="ws-pick-label" hidden>Sync to
         <select id="ws-pick"></select>
@@ -52,6 +54,13 @@
       <button id="btn-start" class="primary">Start syncing</button>
     </div>
     <p class="note">Binaly makes the final call for each file: files over 100 MB stay on this computer and are recorded by name and fingerprint only. Every file that leaves this computer is written to the run log.</p>
+  </section>
+
+  <section id="view-assistant" hidden>
+    <h1>Connect your AI assistant</h1>
+    <p class="muted">Binaly Sync sends the lab's files to Binaly. Your AI assistant is how the lab uses them: you ask it questions, and it answers from the lab's notes and files. Connect it once, on each computer or account you use it from.</p>
+    <label id="as-ws-label" class="row" hidden>Workspace <select id="as-ws"></select></label>
+    <div id="assistant"><p class="muted">Loading...</p></div>
   </section>
 
   <section id="view-settings" hidden>
@@ -87,8 +96,9 @@
       <p>Binaly Sync keeps the lab's folders connected to Binaly. It finds the files in the folders
       you chose, sends them to the lab's Binaly, and notices new and changed ones. It contains no
       AI and decides nothing on its own: for each file, Binaly says whether to send it.</p>
-      <p>Reading the files and writing them into the lab's notes is done separately, by an LLM
-      (Claude Desktop) as a scheduled task. The lab's Binaly Sync page in the app shows how to set it up.</p>
+      <p>Reading the files and writing them into the lab's notes is done separately, by the lab's
+      AI assistant (Claude Desktop) as a scheduled task. The AI assistant page in this window shows
+      how to connect it and set that up.</p>
       <div class="links">
         <button class="quiet" data-link="sends">What Binaly Sync sends, and what it never sends</button>
         <button class="quiet" data-link="source">Source code (open source)</button>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -76,6 +77,7 @@ type trayApp struct {
 	mu        sync.Mutex
 	runCancel context.CancelFunc // the sync in progress, so Pause can stop it
 	update    updateStatus
+	docs      map[string]string // per workspace, the guide address its server last gave
 }
 
 func runTray() {
@@ -136,6 +138,7 @@ func (a *trayApp) onReady() {
 	mUpdate := systray.AddMenuItem("Install update", "A newer version of Binaly Sync is available")
 	mUpdate.Hide()
 	mStatus := systray.AddMenuItem("Open Binaly Sync", "Progress, folders and settings")
+	mAssistant := systray.AddMenuItem("Connect your AI assistant", "Ask your AI assistant about the lab's files, and set up processing")
 	systray.AddSeparator()
 	mVersion := systray.AddMenuItem("Binaly Sync "+versionLabel(), "")
 	mVersion.Disable()
@@ -168,6 +171,8 @@ func (a *trayApp) onReady() {
 				a.InstallUpdate()
 			case <-mStatus.ClickedCh:
 				a.win.Show("status")
+			case <-mAssistant.ClickedCh:
+				a.win.Show("assistant")
 			case <-mCheck.ClickedCh:
 				a.win.Show("about") // the check's progress shows there
 				a.CheckUpdate()
@@ -406,6 +411,66 @@ func (a *trayApp) OpenSetup(accountKey string) {
 			return
 		}
 	}
+}
+
+// Assistant fetches a workspace's "Connect your AI assistant" steps from its server, so the
+// window shows the same connector address and setup prompt as the lab's Binaly Sync page. A
+// server that predates them answers 404: the page then links to the app instead.
+func (a *trayApp) Assistant(accountKey string) (any, error) {
+	for _, acct := range a.e.Cfg.Accounts() {
+		if acct.Key() != accountKey {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
+		defer cancel()
+		out, err := a.e.Client(ctx, acct).GetAssistant(ctx)
+		var ae *api.Error
+		if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+			return map[string]any{"missing": true}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		a.mu.Lock()
+		if a.docs == nil {
+			a.docs = map[string]string{}
+		}
+		a.docs[accountKey] = out.DocsURL
+		a.mu.Unlock()
+		return out, nil
+	}
+	return nil, errors.New("that workspace isn't signed in on this computer")
+}
+
+// OpenDocs opens the guide address the workspace's server gave, only if it is Binaly's own
+// (the server, its app, or binaly.ai), so a page can never send the browser elsewhere.
+func (a *trayApp) OpenDocs(accountKey string) {
+	a.mu.Lock()
+	u := a.docs[accountKey]
+	a.mu.Unlock()
+	for _, acct := range a.e.Cfg.Accounts() {
+		if acct.Key() == accountKey && trustedDocs(u, acct.Server) {
+			_ = openBrowser(u)
+			return
+		}
+	}
+}
+
+func trustedDocs(u, server string) bool {
+	p, err := url.Parse(u)
+	if err != nil || p.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(p.Hostname())
+	if host == "binaly.ai" || strings.HasSuffix(host, ".binaly.ai") {
+		return true
+	}
+	for _, s := range []string{server, appURL(server)} {
+		if sp, err := url.Parse(s); err == nil && strings.EqualFold(sp.Hostname(), host) {
+			return true
+		}
+	}
+	return false
 }
 
 // appURL is the web app for a server: mcp.binaly.ai -> app.binaly.ai.

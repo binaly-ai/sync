@@ -130,6 +130,20 @@ input[type=number] { width: 110px; }
   border: 2px solid var(--line); border-top-color: var(--ink); animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.steps { margin: 8px 0 0; padding-left: 22px; }
+.steps li { margin: 4px 0; }
+.copy-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.copy-line code, pre.prompt {
+  font-family: Consolas, ui-monospace, monospace; font-size: 13px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 6px;
+}
+.copy-line code { padding: 5px 8px; word-break: break-all; }
+pre.prompt { padding: 10px 12px; white-space: pre-wrap; max-height: 260px; overflow: auto; margin: 8px 0; }
+.assistant-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.assistant-tabs button.on { border-color: var(--ochre); color: var(--ink); }
+button.link { color: var(--ochre-deep); text-decoration: underline; text-underline-offset: 3px; padding-left: 0; }
+.copied { color: var(--muted); font-size: 13px; }
+.sensitive { margin-top: 16px; }
 .path-inline { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

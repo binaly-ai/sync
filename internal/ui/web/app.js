@@ -103,19 +103,95 @@ function compactLegend(p) {
 }
 
 // Sync's half is sending files; the AI assistant's half is reading them into notes, as a
-// scheduled task in Claude. Until that has processed anything, say so here and link to the
-// steps, which live on the lab's Binaly Sync page in the app (one copy, kept current there).
+// scheduled task in Claude, and answering the lab's questions. Until anything has been
+// processed, say so from the start (not only once files have arrived: people connected their
+// AI assistant late because this appeared late) and point to the AI assistant page.
 function processingNote(w) {
   const p = w.progress;
-  if (!p || !w.key || p.synced === 0 || p.processed > 0) return "";
-  const waiting = stages(p).waiting;
+  if (!w.key || w.state !== "ok" || (p && p.processed > 0)) return "";
+  const waiting = p ? stages(p).waiting : 0;
   return `<div class="note-box">
-    <b>Next: processing by an LLM.</b> Binaly Sync only sends the lab's files to Binaly. An LLM
-    (Claude Desktop) reads each one and writes it into the lab's notes, as a scheduled task that
-    runs every hour. It's set up once, in Claude Desktop. Until it runs, ${fmt(waiting)}
-    file${waiting === 1 ? " waits" : "s wait"} for it.
-    <div class="actions"><button class="primary" data-setup="${esc(w.key)}">How to set it up</button></div>
+    <b>Next: connect your AI assistant.</b> Binaly Sync only sends the lab's files to Binaly. Your
+    AI assistant (Claude Desktop) reads each one into the lab's notes, as a scheduled task that runs
+    every hour, and answers the lab's questions from them. It's set up once.${waiting ? ` Until it runs, ${fmt(waiting)} file${waiting === 1 ? " waits" : "s wait"} for it.` : ""}
+    <div class="actions"><button class="primary" data-assistant="${esc(w.key)}">Connect your AI assistant</button></div>
   </div>`;
+}
+
+// ---- AI assistant ----
+// The steps come from the workspace's server (GET /sync/v1/assistant), the same text as the
+// lab's Binaly Sync page in the app. A server that predates them gets a link to that page.
+let assistantKey = "";
+let assistantTab = 0;
+let assistantData = null;
+function fillAssistantWs() {
+  const accts = (last && last.accounts) || [];
+  if (!assistantKey || !accts.some((a) => a.key === assistantKey)) assistantKey = accts[0] ? accts[0].key : "";
+  $("as-ws").innerHTML = accts.map((a) => `<option value="${esc(a.key)}"${a.key === assistantKey ? " selected" : ""}>${esc(a.workspaceName)}</option>`).join("");
+  $("as-ws-label").hidden = accts.length < 2;
+}
+async function showAssistant() {
+  if (!last) { $("assistant").innerHTML = `<p class="muted">Loading...</p>`; return; } // renderStatus calls back
+  fillAssistantWs();
+  if (!assistantKey) {
+    $("assistant").innerHTML = `<p class="card">Sign in to a workspace first. <button class="primary" data-signin>Sign in</button></p>`;
+    return;
+  }
+  $("assistant").innerHTML = `<p class="muted">Loading...</p>`;
+  try {
+    assistantData = await call("assistant", { accountKey: assistantKey });
+  } catch (e) {
+    $("assistant").innerHTML = `<div class="warning">Couldn't load the steps from Binaly: ${esc(e.message)}</div>
+      <div class="actions"><button data-assistant-retry>Try again</button><button class="quiet" data-setup="${esc(assistantKey)}">Open the Binaly Sync page in the app</button></div>`;
+    return;
+  }
+  renderAssistant();
+}
+function renderAssistant() {
+  const d = assistantData || {};
+  if (d.missing || !d.connectorUrl) {
+    $("assistant").innerHTML = `<div class="card"><p>The lab's Binaly Sync page in the app shows how to connect your AI assistant and set up processing.</p>
+      <div class="actions"><button class="primary" data-setup="${esc(assistantKey)}">Open the Binaly Sync page</button></div></div>`;
+    return;
+  }
+  const list = d.assistants || [];
+  if (assistantTab >= list.length) assistantTab = 0;
+  const a = list[assistantTab];
+  const steps = (xs) => xs && xs.length ? `<ol class="steps">${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
+  const proc = d.processing || {};
+  $("assistant").innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">1. Add Binaly to your AI assistant</h2>
+      <div class="copy-line"><code id="as-url">${esc(d.connectorUrl)}</code><button data-copy="as-url">Copy address</button><span class="copied" id="as-url-copied" hidden>Copied</span></div>
+      ${list.length > 1 ? `<div class="assistant-tabs">${list.map((x, i) => `<button class="small${i === assistantTab ? " on" : ""}" data-as-tab="${i}">${esc(x.name)}</button>`).join("")}</div>` : ""}
+      ${a ? `${list.length === 1 ? `<p><b>${esc(a.name)}</b></p>` : ""}${steps(a.steps)}` : ""}
+      ${d.afterConnect ? `<p>${esc(d.afterConnect)}</p>` : ""}
+    </div>
+    ${proc.setupPrompt ? `<div class="card">
+      <h2 style="margin-top:0">2. Set up processing</h2>
+      ${proc.lead ? `<p>${esc(proc.lead)}</p>` : ""}
+      <pre class="prompt" id="as-prompt">${esc(proc.setupPrompt)}</pre>
+      <div class="copy-line"><button class="primary" data-copy="as-prompt">Copy the setup prompt</button><span class="copied" id="as-prompt-copied" hidden>Copied</span></div>
+    </div>` : ""}
+    ${d.docsUrl ? `<div class="actions"><button class="quiet link" data-docs="${esc(assistantKey)}">The full guide, in your browser</button></div>` : ""}`;
+}
+
+// The window's page has no secure origin, so the clipboard API may be refused; a selected
+// text area and the copy command work everywhere.
+async function copyText(id) {
+  const text = $(id).textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  const done = $(id + "-copied");
+  if (done) { done.hidden = false; setTimeout(() => (done.hidden = true), 2000); }
 }
 
 let last = null;
@@ -180,6 +256,9 @@ function renderStatus(s) {
     fillWsPick();
     updateInsideNote();
   }
+  // The window can open on the AI assistant page before the first status arrives: fill it in
+  // once the workspaces are known, or when one is signed in from that page.
+  if (!$("view-assistant").hidden && (s.accounts || []).length && !assistantKey) showAssistant();
   renderUpdate(s.update || {});
   $("version").textContent = (s.version || "").replace(/^v/, "");
 }
@@ -300,12 +379,13 @@ async function loadSettings() {
 // ---- routing ----
 function route() {
   const [screen, query] = (current || "status").split("?");
-  for (const v of ["status", "preview", "settings", "about"]) $("view-" + v).hidden = v !== screen;
+  for (const v of ["status", "preview", "assistant", "settings", "about"]) $("view-" + v).hidden = v !== screen;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === screen));
   if (screen === "preview") showPreview(new URLSearchParams(query).get("folder") || "");
   if (screen === "settings") loadSettings();
+  if (screen === "assistant") showAssistant();
 }
-// Screens are "status", "settings" or "preview?folder=...". The program opens one with
+// Screens are "status", "assistant", "settings" or "preview?folder=...". The program opens one with
 // binalyShow, e.g. after the tray's "Add folder...".
 let current = window.binalyStartScreen || "status";
 function go(screen) { current = screen; route(); }
@@ -347,6 +427,11 @@ document.addEventListener("click", async (ev) => {
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
     else if (t.dataset.setup) await call("open-setup", { accountKey: t.dataset.setup });
+    else if (t.dataset.assistant) { assistantKey = t.dataset.assistant; go("assistant"); }
+    else if (t.hasAttribute("data-assistant-retry")) showAssistant();
+    else if (t.dataset.asTab) { assistantTab = Number(t.dataset.asTab); renderAssistant(); }
+    else if (t.dataset.copy) await copyText(t.dataset.copy);
+    else if (t.dataset.docs) await call("open-docs", { accountKey: t.dataset.docs });
     else if (t.dataset.remove) { removing = t.dataset.remove; renderStatus(last); }
     else if (t.hasAttribute("data-remove-no")) { removing = ""; renderStatus(last); }
     else if (t.dataset.removeYes) {
@@ -387,4 +472,7 @@ poll();
 setInterval(poll, 2000);
 
 // Choosing another lab on the preview screen re-checks whether that lab already covers it.
-document.addEventListener("change", (ev) => { if (ev.target && ev.target.id === "ws-pick") updateInsideNote(); });
+document.addEventListener("change", (ev) => {
+  if (ev.target && ev.target.id === "ws-pick") updateInsideNote();
+  if (ev.target && ev.target.id === "as-ws") { assistantKey = ev.target.value; assistantTab = 0; showAssistant(); }
+});

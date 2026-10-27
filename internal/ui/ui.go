@@ -39,6 +39,11 @@ type Backend interface {
 	RemoveFolder(accountKey, folderID string) error
 	// OpenURL opens an address in the person's browser.
 	OpenURL(url string)
+	// Assistant returns a workspace's "Connect your AI assistant" steps, from its server.
+	Assistant(accountKey string) (any, error)
+	// OpenDocs opens the workspace's guide to connecting an AI assistant, at the address its
+	// server gave (checked to be Binaly's own).
+	OpenDocs(accountKey string)
 }
 
 // Links are the only addresses the page can open: a name, never a URL from the page, so the
@@ -119,6 +124,10 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.OpenURL(u)
 	case "open-binaly":
 		b.OpenInBinaly(in.AccountKey)
+	case "assistant":
+		return b.Assistant(in.AccountKey)
+	case "open-docs":
+		b.OpenDocs(in.AccountKey)
 	default:
 		return nil, errors.New("unknown request " + name)
 	}
