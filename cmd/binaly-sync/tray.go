@@ -152,15 +152,11 @@ func (a *trayApp) onReady() {
 	go a.updater(mUpdate)
 	go listenShow(a.ctx, func() { a.win.Show("status") })
 
-	// First run: sign in, then choose a folder and preview it.
-	if len(a.e.Cfg.Accounts()) == 0 {
-		go func() {
-			if err := a.SignIn(); err == nil {
-				a.addFolderFlow()
-			} else {
-				a.win.Show("status")
-			}
-		}()
+	// First launch: the wizard (sign in and add a folder, connect the AI assistant, set up
+	// processing). It opens at each launch until finished or skipped, so closing the window
+	// halfway doesn't lose it.
+	if a.e.Cfg.WizardPending() {
+		a.win.Show("welcome")
 	}
 
 	go func() {
@@ -359,19 +355,6 @@ func (a *trayApp) pausedUntil() string {
 	}
 }
 
-func (a *trayApp) addFolderFlow() {
-	folder, err := a.PickFolder()
-	if err != nil || folder == "" {
-		return
-	}
-	a.win.Show("preview?folder=" + urlEscape(folder))
-}
-
-func urlEscape(s string) string {
-	r := strings.NewReplacer("%", "%25", " ", "%20", "#", "%23", "&", "%26", "?", "%3F", "+", "%2B")
-	return r.Replace(s)
-}
-
 // windowError explains a window that can't open, and offers the fix.
 func (a *trayApp) windowError(err error) {
 	if errors.Is(err, ui.ErrNoWebView) {
@@ -497,7 +480,8 @@ func (a *trayApp) Status() any {
 	a.mu.Lock()
 	upd := a.update
 	a.mu.Unlock()
-	return map[string]any{"status": a.e.Snapshot(), "accounts": accts, "pausedUntil": a.pausedUntil(), "version": Version, "update": upd}
+	return map[string]any{"status": a.e.Snapshot(), "accounts": accts, "pausedUntil": a.pausedUntil(), "version": Version, "update": upd,
+		"wizard": map[string]any{"pending": a.e.Cfg.WizardPending(), "setupPending": a.e.Cfg.SetupPending()}}
 }
 
 // previewView adds what the page needs beyond the counts: the limit, and whether the folder is
@@ -669,12 +653,28 @@ func (a *trayApp) SaveSettings(raw json.RawMessage) error {
 }
 
 func (a *trayApp) SignIn() error {
-	_, err := Login(a.ctx, a.e, defaultServer(), "")
-	if err == nil {
-		a.SyncNow()
+	known := map[string]bool{}
+	for _, x := range a.e.Cfg.Accounts() {
+		known[x.Key()] = true
 	}
-	return err
+	acct, err := Login(a.ctx, a.e, defaultServer(), "")
+	if err != nil {
+		return err
+	}
+	a.SyncNow()
+	if !known[acct.Key()] {
+		// A workspace new to this computer: walk through its AI assistant and processing steps.
+		// During the first-launch wizard the wizard itself goes on to them.
+		_ = a.e.Cfg.MarkSetupPending(acct.Key())
+		if !a.e.Cfg.WizardPending() {
+			a.win.Show("welcome?step=2&account=" + url.QueryEscape(acct.Key()))
+		}
+	}
+	return nil
 }
+
+// FinishWizard records that the wizard was finished or skipped, for one workspace's steps.
+func (a *trayApp) FinishWizard(accountKey string) error { return a.e.Cfg.FinishWizard(accountKey) }
 
 func (a *trayApp) SignOut(accountKey string) error {
 	_ = a.e.Creds.Delete(accountKey)

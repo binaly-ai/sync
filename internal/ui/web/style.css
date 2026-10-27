@@ -144,6 +144,13 @@ pre.prompt { padding: 10px 12px; white-space: pre-wrap; max-height: 260px; overf
 button.link { color: var(--ochre-deep); text-decoration: underline; text-underline-offset: 3px; padding-left: 0; }
 .copied { color: var(--muted); font-size: 13px; }
 .sensitive { margin-top: 16px; }
+.wiz-steps { display: flex; flex-wrap: wrap; gap: 6px 22px; list-style: none; padding: 0; margin: 0 0 18px; font-size: 13.5px; color: var(--muted); counter-reset: wiz; }
+.wiz-steps li { counter-increment: wiz; }
+.wiz-steps li::before { content: counter(wiz); display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 7px; border-radius: 50%; border: 1px solid var(--line); font-size: 12px; }
+.wiz-steps li.on { color: var(--ink); font-weight: 600; }
+.wiz-steps li.on::before { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.wiz-steps li.past::before { background: var(--line); }
+.wiz-progress { font-size: 13px; color: var(--muted); margin-top: 18px; display: flex; align-items: center; gap: 8px; }
 .path-inline { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

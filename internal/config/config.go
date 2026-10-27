@@ -103,6 +103,12 @@ type File struct {
 	InstallID string    `json:"installId"`
 	Accounts  []Account `json:"accounts"`
 	Settings  Settings  `json:"settings"`
+	// Wizard is the first-launch wizard's state: "pending" on a new install until the wizard is
+	// finished or skipped, then "done". Installs from before the wizard have "" and never see it.
+	Wizard string `json:"wizard,omitempty"`
+	// SetupPending lists workspaces (account keys) signed in since, whose AI assistant and
+	// processing steps haven't been finished or skipped yet.
+	SetupPending []string `json:"setupPending,omitempty"`
 }
 
 // Store reads and writes config.json under Dir().
@@ -144,6 +150,7 @@ func Open() (*Store, error) {
 		}
 	case errors.Is(err, os.ErrNotExist):
 		s.data.Settings = Settings{StartAtLogon: true, Updates: "auto", CheckMinutes: DefaultCheckMinutes}
+		s.data.Wizard = "pending"
 	default:
 		return nil, err
 	}
@@ -211,7 +218,63 @@ func (s *Store) RemoveAccount(key string) error {
 		}
 	}
 	s.data.Accounts = out
+	s.data.SetupPending = without(s.data.SetupPending, key)
 	return s.saveLocked()
+}
+
+// WizardPending reports whether the first-launch wizard should open: a new install that hasn't
+// finished or skipped it.
+func (s *Store) WizardPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data.Wizard == "pending"
+}
+
+// SetupPending returns the workspaces whose AI assistant and processing steps are still to do.
+func (s *Store) SetupPending() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.data.SetupPending...)
+}
+
+// MarkSetupPending records a newly signed-in workspace, so the window walks through connecting
+// the AI assistant and setting up processing for it.
+func (s *Store) MarkSetupPending(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range s.data.SetupPending {
+		if k == key {
+			return nil
+		}
+	}
+	s.data.SetupPending = append(s.data.SetupPending, key)
+	return s.saveLocked()
+}
+
+// FinishWizard records that the wizard was finished or skipped, for this install and for one
+// workspace (all of them when key is "").
+func (s *Store) FinishWizard(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Wizard == "pending" {
+		s.data.Wizard = "done"
+	}
+	if key == "" {
+		s.data.SetupPending = nil
+	} else {
+		s.data.SetupPending = without(s.data.SetupPending, key)
+	}
+	return s.saveLocked()
+}
+
+func without(list []string, key string) []string {
+	var out []string
+	for _, k := range list {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // Settings returns the current preferences.

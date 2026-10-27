@@ -10,7 +10,7 @@
 <body>
 <header>
   <div class="brand"><img src="icon.png" alt="" width="28" height="28"><span>Binaly Sync</span></div>
-  <nav>
+  <nav id="nav">
     <a data-nav="status">Status</a>
     <a data-nav="assistant">AI assistant</a>
     <a data-nav="settings">Settings</a>
@@ -41,6 +41,16 @@
     <p id="empty" class="card" hidden>Not signed in to a workspace yet. <button id="btn-signin-empty" class="primary">Sign in</button></p>
   </section>
 
+  <section id="view-welcome" hidden>
+    <ol class="wiz-steps" id="wiz-steps">
+      <li data-step="1">Add a folder</li>
+      <li data-step="2">Connect your AI assistant</li>
+      <li data-step="3">Set up processing</li>
+    </ol>
+    <div id="wizard"></div>
+    <p id="wiz-progress" class="wiz-progress" hidden></p>
+  </section>
+
   <section id="view-preview" hidden>
     <h1>Before anything is sent</h1>
     <p class="muted">This is what Binaly Sync found. Nothing has left this computer.</p>
@@ -51,6 +61,7 @@
         <select id="ws-pick"></select>
       </label>
       <button id="btn-change" class="quiet">Choose another folder</button>
+      <button id="btn-wiz-later" class="quiet" hidden>I'll do this later</button>
       <button id="btn-start" class="primary">Start syncing</button>
     </div>
     <p class="note">Binaly makes the final call for each file: files over 100 MB stay on this computer and are recorded by name and fingerprint only. Every file that leaves this computer is written to the run log.</p>

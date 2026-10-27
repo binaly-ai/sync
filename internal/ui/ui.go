@@ -44,6 +44,9 @@ type Backend interface {
 	// OpenDocs opens the workspace's guide to connecting an AI assistant, at the address its
 	// server gave (checked to be Binaly's own).
 	OpenDocs(accountKey string)
+	// FinishWizard records that the first-launch wizard was finished or skipped (for one
+	// workspace's steps, or all when accountKey is "").
+	FinishWizard(accountKey string) error
 }
 
 // Links are the only addresses the page can open: a name, never a URL from the page, so the
@@ -128,6 +131,8 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		return b.Assistant(in.AccountKey)
 	case "open-docs":
 		b.OpenDocs(in.AccountKey)
+	case "wizard-done":
+		return ok, b.FinishWizard(in.AccountKey)
 	default:
 		return nil, errors.New("unknown request " + name)
 	}

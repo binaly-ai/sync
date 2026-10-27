@@ -30,6 +30,7 @@ func (s *stub) OpenInBinaly(string)                {}
 func (s *stub) RemoveFolder(string, string) error  { return nil }
 func (s *stub) OpenURL(string)                     {}
 func (s *stub) OpenDocs(k string)                  { s.calls = append(s.calls, "docs:"+k) }
+func (s *stub) FinishWizard(k string) error        { s.calls = append(s.calls, "done:"+k); return nil }
 func (s *stub) Assistant(k string) (any, error) {
 	s.calls = append(s.calls, "assistant:"+k)
 	return map[string]string{"connectorUrl": "https://mcp.binaly.ai/mcp"}, nil
@@ -58,5 +59,21 @@ func TestPageHasTheAssistantScreenAndTheSensitiveNote(t *testing.T) {
 	}
 	if strings.Contains(p, "—") {
 		t.Fatal("the page has an em dash")
+	}
+}
+
+func TestWizardRequestsAndScreen(t *testing.T) {
+	s := &stub{}
+	if _, err := Call(s, "wizard-done", []byte(`{"accountKey":"k1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.calls, ",") != "done:k1" {
+		t.Fatalf("calls %v", s.calls)
+	}
+	p := Page()
+	for _, want := range []string{`id="view-welcome"`, "Connect your AI assistant", "Set up processing", "I'll do this later", "a computer that stays on", `"wizard-done"`} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("page lacks %q", want)
+		}
 	}
 }

@@ -154,26 +154,137 @@ function renderAssistant() {
       <div class="actions"><button class="primary" data-setup="${esc(assistantKey)}">Open the Binaly Sync page</button></div></div>`;
     return;
   }
+  $("assistant").innerHTML = connectCard(d, "1. Add Binaly to your AI assistant") +
+    processingCard(d, "2. Set up processing") +
+    (d.docsUrl ? `<div class="actions"><button class="quiet link" data-docs="${esc(assistantKey)}">The full guide, in your browser</button></div>` : "");
+}
+
+// The two halves of connecting, shared by the AI assistant page and the wizard. Only one is
+// on screen at a time, so their element ids don't clash.
+function connectCard(d, heading) {
   const list = d.assistants || [];
   if (assistantTab >= list.length) assistantTab = 0;
   const a = list[assistantTab];
   const steps = (xs) => xs && xs.length ? `<ol class="steps">${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
-  const proc = d.processing || {};
-  $("assistant").innerHTML = `
-    <div class="card">
-      <h2 style="margin-top:0">1. Add Binaly to your AI assistant</h2>
+  return `<div class="card">
+      <h2 style="margin-top:0">${esc(heading)}</h2>
       <div class="copy-line"><code id="as-url">${esc(d.connectorUrl)}</code><button data-copy="as-url">Copy address</button><span class="copied" id="as-url-copied" hidden>Copied</span></div>
       ${list.length > 1 ? `<div class="assistant-tabs">${list.map((x, i) => `<button class="small${i === assistantTab ? " on" : ""}" data-as-tab="${i}">${esc(x.name)}</button>`).join("")}</div>` : ""}
       ${a ? `${list.length === 1 ? `<p><b>${esc(a.name)}</b></p>` : ""}${steps(a.steps)}` : ""}
       ${d.afterConnect ? `<p>${esc(d.afterConnect)}</p>` : ""}
-    </div>
-    ${proc.setupPrompt ? `<div class="card">
-      <h2 style="margin-top:0">2. Set up processing</h2>
+    </div>`;
+}
+function processingCard(d, heading) {
+  const proc = d.processing || {};
+  if (!proc.setupPrompt) return "";
+  return `<div class="card">
+      <h2 style="margin-top:0">${esc(heading)}</h2>
       ${proc.lead ? `<p>${esc(proc.lead)}</p>` : ""}
       <pre class="prompt" id="as-prompt">${esc(proc.setupPrompt)}</pre>
       <div class="copy-line"><button class="primary" data-copy="as-prompt">Copy the setup prompt</button><span class="copied" id="as-prompt-copied" hidden>Copied</span></div>
-    </div>` : ""}
-    ${d.docsUrl ? `<div class="actions"><button class="quiet link" data-docs="${esc(assistantKey)}">The full guide, in your browser</button></div>` : ""}`;
+      <p class="muted">The task runs only while Claude Desktop is open, so set it up on a computer that stays on, with Claude Desktop running. It doesn't have to be this computer.</p>
+    </div>`;
+}
+
+// ---- first-launch wizard ----
+// Three steps: sign in and add a folder, connect the AI assistant, set up processing. Each can
+// be skipped. Sync starts counting and uploading as soon as the folder is added, so a progress
+// line runs under the later steps. Steps 2 and 3 also open for a workspace signed in later
+// ("welcome?step=2&account=...").
+let wizStep = 1;
+let wizKey = "";
+let wizData = null;
+let wizDataKey = "";
+let previewWizard = false;
+function wizAccount() {
+  const accts = (last && last.accounts) || [];
+  if (!wizKey || !accts.some((a) => a.key === wizKey)) wizKey = accts[0] ? accts[0].key : "";
+  return wizKey;
+}
+async function showWizard() {
+  document.querySelectorAll("#wiz-steps li").forEach((li) => {
+    const n = Number(li.dataset.step);
+    li.classList.toggle("on", n === wizStep);
+    li.classList.toggle("past", n < wizStep);
+  });
+  const later = `<button class="quiet" data-wiz-later>I'll do this later</button>`;
+  if (!last) { $("wizard").innerHTML = `<p class="muted">Loading...</p>`; return; } // renderStatus calls back
+  const accts = last.accounts || [];
+  if (wizStep === 1) {
+    if (!accts.length) {
+      $("wizard").innerHTML = `<h1>Welcome to Binaly Sync</h1>
+        <p>Binaly Sync keeps the lab's folders connected to Binaly, so your AI assistant can answer from the lab's own files. Start by signing in with your Binaly account; your browser opens for it.</p>
+        <div class="actions"><button class="primary" data-wiz-signin>Sign in</button>${later}</div>`;
+      return;
+    }
+    const synced = ((last.status || {}).workspaces || []).flatMap((w) => w.folders || []);
+    $("wizard").innerHTML = `<h1>Choose a folder to sync</h1>
+      <p>Pick a folder with the lab's files: papers, notebooks, data, presentations. You'll see what Binaly Sync found before anything is sent.</p>
+      ${synced.length ? `<p class="muted">Already syncing: ${synced.map((f) => `<span class="path-inline">${esc(f.path)}</span>`).join(", ")}</p>` : ""}
+      <div class="note-box sensitive"><b>Before you choose a folder.</b> Everything in a synced folder becomes notes that every member's AI assistant can read back. Leave out evaluations of people, medical or HR records, and peer reviews you're writing for a journal. Binaly holds back what it recognizes as sensitive and lists it on the Binaly Sync page for you to decide, but it can't recognize everything.</div>
+      <div class="actions"><button class="primary" data-wiz-pick>Choose a folder...</button>${synced.length ? `<button data-wiz-next>Next</button>` : ""}${later}</div>`;
+    return;
+  }
+  const key = wizAccount();
+  if (!key) { finishWizard(); return; } // steps 2 and 3 need a workspace
+  if (wizDataKey !== key) {
+    $("wizard").innerHTML = `<p class="muted">Loading...</p>`;
+    try {
+      wizData = await call("assistant", { accountKey: key });
+      wizDataKey = key;
+    } catch (e) {
+      $("wizard").innerHTML = `<div class="warning">Couldn't load the steps from Binaly: ${esc(e.message)}</div>
+        <div class="actions"><button data-wiz-retry>Try again</button>${later}</div>`;
+      return;
+    }
+  }
+  const d = wizData || {};
+  const name = (accts.find((a) => a.key === key) || {}).workspaceName || "";
+  if (d.missing || !d.connectorUrl) {
+    $("wizard").innerHTML = `<h1>Connect your AI assistant</h1>
+      <p>The lab's Binaly Sync page in the app shows how to connect your AI assistant and set up processing.</p>
+      <div class="actions"><button class="primary" data-setup="${esc(key)}">Open the Binaly Sync page</button><button data-wiz-finish>Done</button></div>`;
+    return;
+  }
+  if (wizStep === 2) {
+    $("wizard").innerHTML = `<h1>Connect Binaly to your AI assistant</h1>
+      <p>Your AI assistant is how the lab uses its files: ask it questions, and it answers from ${name ? esc(name) + "'s" : "the lab's"} notes and files. Choose the one you use.</p>
+      ${connectCard(d, "Add the Binaly connector")}
+      <div class="actions"><button class="primary" data-wiz-next>Next</button>${later}</div>`;
+    return;
+  }
+  $("wizard").innerHTML = `<h1>Set up processing</h1>
+    <p>Processing reads each file Binaly Sync sends and writes it into the lab's notes. It runs as an hourly task in Claude Desktop, set up once for the whole lab. If someone in the lab already set it up, skip this step.</p>
+    ${processingCard(d, "Paste this into Claude Desktop")}
+    <div class="actions"><button class="primary" data-wiz-finish>Done</button>${later.replace("data-wiz-later", "data-wiz-finish")}</div>`;
+}
+function wizNext() {
+  if (wizStep >= 3) { finishWizard(); return; }
+  wizStep++;
+  showWizard();
+}
+async function finishWizard() {
+  try { await call("wizard-done", { accountKey: wizKey }); } catch { /* shown again next launch */ }
+  previewWizard = false;
+  go("status");
+  poll();
+}
+// The live line under the wizard: Sync works while the person reads.
+function wizProgress(s) {
+  const el = $("wiz-progress");
+  if (!el || $("view-welcome").hidden) return;
+  if (!(s.accounts || []).length) { el.hidden = true; return; }
+  const st = s.status || {};
+  const ws = (st.workspaces || []).find((w) => w.key === wizKey) || (st.workspaces || [])[0];
+  const p = ws && ws.progress;
+  let text = "";
+  if (p && p.total) {
+    const x = stages(p);
+    text = `${fmt(p.total)} files found${p.counting ? " so far" : ""}, ${fmt(x.processed + x.waiting + x.attention)} in Binaly${x.toUpload ? `, ${fmt(x.toUpload)} to upload` : ""}.`;
+  } else if (p && p.counting) text = "Counting files...";
+  if (st.running && st.activity) text = text ? `${text} ${st.activity}.` : `${st.activity}.`;
+  el.innerHTML = text ? `${st.running ? spinner : ""}<span>${esc(text)}</span>` : "";
+  el.hidden = !text;
 }
 
 // The window's page has no secure origin, so the clipboard API may be refused; a selected
@@ -195,6 +306,7 @@ async function copyText(id) {
 }
 
 let last = null;
+let wizRenderedFor = -1; // accounts known when the wizard last drew its step
 // The folder whose "Stop syncing" is asking for confirmation, if any; the one being stopped
 // (waiting for the server); and the last stop's result, shown on the card.
 let removing = "";
@@ -259,6 +371,12 @@ function renderStatus(s) {
   // The window can open on the AI assistant page before the first status arrives: fill it in
   // once the workspaces are known, or when one is signed in from that page.
   if (!$("view-assistant").hidden && (s.accounts || []).length && !assistantKey) showAssistant();
+  if (!$("view-welcome").hidden) {
+    // First status, or a sign-in that just finished: the step's content depends on them.
+    const n = (s.accounts || []).length;
+    if (wizRenderedFor !== n) { wizRenderedFor = n; showWizard(); }
+    wizProgress(s);
+  }
   renderUpdate(s.update || {});
   $("version").textContent = (s.version || "").replace(/^v/, "");
 }
@@ -379,13 +497,25 @@ async function loadSettings() {
 // ---- routing ----
 function route() {
   const [screen, query] = (current || "status").split("?");
-  for (const v of ["status", "preview", "assistant", "settings", "about"]) $("view-" + v).hidden = v !== screen;
+  for (const v of ["welcome", "status", "preview", "assistant", "settings", "about"]) $("view-" + v).hidden = v !== screen;
+  // The wizard has its own way forward; the menu comes back when it's done.
+  $("nav").hidden = screen === "welcome" || (screen === "preview" && previewWizard);
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === screen));
-  if (screen === "preview") showPreview(new URLSearchParams(query).get("folder") || "");
+  const q = new URLSearchParams(query);
+  if (screen === "preview") {
+    previewWizard = q.get("wizard") === "1";
+    $("btn-wiz-later").hidden = !previewWizard;
+    showPreview(q.get("folder") || "");
+  }
+  if (screen === "welcome") {
+    wizStep = Number(q.get("step")) || 1;
+    if (q.get("account")) wizKey = q.get("account");
+    showWizard();
+  }
   if (screen === "settings") loadSettings();
   if (screen === "assistant") showAssistant();
 }
-// Screens are "status", "assistant", "settings" or "preview?folder=...". The program opens one with
+// Screens are "welcome", "status", "assistant", "settings" or "preview?folder=...". The program opens one with
 // binalyShow, e.g. after the tray's "Add folder...".
 let current = window.binalyStartScreen || "status";
 function go(screen) { current = screen; route(); }
@@ -395,10 +525,10 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "F5" || ((ev.ctrlKey || ev.metaKey) && (ev.key === "r" || ev.key === "R"))) ev.preventDefault();
 });
 
-async function pickAndPreview() {
+async function pickAndPreview(wizard) {
   try {
     const { folder } = await call("pick", {});
-    if (folder) go("preview?folder=" + encodeURIComponent(folder));
+    if (folder) go("preview?folder=" + encodeURIComponent(folder) + (wizard ? "&wizard=1" : ""));
   } catch (e) { alertBox(e.message); }
 }
 function alertBox(msg) { $("activity").textContent = msg; }
@@ -417,19 +547,33 @@ document.addEventListener("click", async (ev) => {
     }
     else if (t.dataset.pause) { $("pause-menu").hidden = true; await call("pause", { minutes: Number(t.dataset.pause) }); poll(); }
     else if (t.dataset.open) await call("open-binaly", { accountKey: t.dataset.open });
-    else if (t.id === "btn-add" || t.id === "btn-change") await pickAndPreview();
+    else if (t.id === "btn-add" || t.id === "btn-change") await pickAndPreview(t.id === "btn-change" && previewWizard);
     else if (t.id === "btn-start") {
       t.disabled = true;
       await call("start", { folder: previewFolder, accountKey: $("ws-pick").value });
-      go("status");
+      if (previewWizard) {
+        wizKey = $("ws-pick").value || wizKey;
+        previewWizard = false;
+        go("welcome?step=2");
+      } else go("status");
     }
+    else if (t.id === "btn-wiz-later") { previewWizard = false; go("welcome?step=2"); }
+    else if (t.hasAttribute("data-wiz-signin")) { t.disabled = true; await call("signin", {}); await poll(); showWizard(); }
+    else if (t.hasAttribute("data-wiz-pick")) await pickAndPreview(true);
+    else if (t.hasAttribute("data-wiz-next") || t.hasAttribute("data-wiz-later")) {
+      // Skipping the sign-in skips the steps that need a workspace too.
+      if (wizStep === 1 && !((last && last.accounts) || []).length) finishWizard();
+      else wizNext();
+    }
+    else if (t.hasAttribute("data-wiz-finish")) finishWizard();
+    else if (t.hasAttribute("data-wiz-retry")) { wizDataKey = ""; showWizard(); }
     else if (t.id === "btn-signin" || t.id === "btn-signin-empty" || t.hasAttribute("data-signin")) { await call("signin", {}); poll(); }
     else if (t.dataset.signout) { await call("signout", { accountKey: t.dataset.signout }); poll(); }
     else if (t.dataset.confirm) { await call("confirm-deletions", { accountKey: t.dataset.confirm }); poll(); }
     else if (t.dataset.setup) await call("open-setup", { accountKey: t.dataset.setup });
     else if (t.dataset.assistant) { assistantKey = t.dataset.assistant; go("assistant"); }
     else if (t.hasAttribute("data-assistant-retry")) showAssistant();
-    else if (t.dataset.asTab) { assistantTab = Number(t.dataset.asTab); renderAssistant(); }
+    else if (t.dataset.asTab) { assistantTab = Number(t.dataset.asTab); if (!$("view-welcome").hidden) showWizard(); else renderAssistant(); }
     else if (t.dataset.copy) await copyText(t.dataset.copy);
     else if (t.dataset.docs) await call("open-docs", { accountKey: t.dataset.docs });
     else if (t.dataset.remove) { removing = t.dataset.remove; renderStatus(last); }
