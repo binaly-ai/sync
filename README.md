@@ -30,7 +30,14 @@ drop them). Settings, "Check folders every", changes that interval on this compu
 
 OneNote notebooks: where the OneNote desktop app is installed, each new or changed section is
 exported to PDF by OneNote itself and sent in place of the `.one` file, which nothing else
-reads well. Without the app, Binaly Sync says how many sections it can't include.
+reads well, together with each page's title, dates, authors and text (including the words
+OneNote recognized in handwriting and pictures). Without the app, Binaly Sync says how many
+sections it can't include.
+
+Text and dates: with each file it sends the file's creation time and what the document says
+about itself (title, author, dates, DOI, page count). When Binaly asks, it also sends a file's
+typed text page by page (PDF, Word, PowerPoint, Excel and plain text), so the lab's AI assistant
+can search and read whole documents. [WHAT-IT-SENDS.md](WHAT-IT-SENDS.md) has the details.
 
 It keeps itself up to date: it checks this repository's releases every few hours and installs a
 new version when one appears, stopping a running sync first (the next sync picks up where it
@@ -47,11 +54,14 @@ Click the tray icon to open Binaly Sync's window:
 - **Status:** each workspace's progress (processed, waiting for the LLM, waiting to upload,
   needs attention), the folders being synced, Add folder, Stop syncing a folder, Sync now,
   Pause (for 1, 6 or 24 hours, or until you resume) and Open in Binaly.
+- **AI assistant:** how to connect your AI assistant (Claude, ChatGPT and others) to the
+  workspace, and the prompt that sets up hourly processing in Claude Desktop, with copy buttons.
 - **Settings:** start at Windows sign-in, how updates install, an upload speed limit, and the
   workspaces this computer is signed in to (Add workspace).
 - **About:** the version, Check for updates, the run logs, and links to this page and the source.
 
-The tray menu itself only opens the window, shows the version, checks for updates and quits.
+The tray menu itself only opens the window (or its AI assistant page), shows the version,
+checks for updates and quits.
 One installation can be signed in to several Binaly workspaces at once.
 
 For IT staff and support, the same program works from a terminal:
