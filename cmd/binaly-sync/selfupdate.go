@@ -52,7 +52,11 @@ const (
 	installNow
 )
 
-// updater checks for a release a couple of minutes after start, then every 6 hours. With
+// updateEvery is how often a running copy looks for a new release. Every 2 hours, not 6, so a
+// fix reaches pilot labs the same working day it ships (2026-10-27).
+const updateEvery = 2 * time.Hour
+
+// updater checks for a release a couple of minutes after start, then every updateEvery. With
 // automatic updates on, it installs one and restarts; otherwise it offers it in the window and
 // the tray menu. Every step shows in the window (About, and the status page) as it happens.
 func (a *trayApp) updater(menu *systray.MenuItem) {
@@ -73,7 +77,7 @@ func (a *trayApp) updater(menu *systray.MenuItem) {
 		case req = <-a.updateNow:
 		}
 		if eligible {
-			next = time.After(6 * time.Hour)
+			next = time.After(updateEvery)
 		}
 		if !eligible {
 			if req != scheduled {
