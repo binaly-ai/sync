@@ -45,6 +45,32 @@ func TestExportSample(t *testing.T) {
 	}
 }
 
+// Reads a sample section's pages (BINALY_SYNC_ONENOTE_SAMPLE): OneNote lists them only once
+// the section is loaded, which the export does.
+func TestExportPagesSample(t *testing.T) {
+	sample := os.Getenv("BINALY_SYNC_ONENOTE_SAMPLE")
+	if sample == "" || !Available() {
+		t.Skip("set BINALY_SYNC_ONENOTE_SAMPLE and install OneNote to run")
+	}
+	dir := t.TempDir()
+	x := New(filepath.Join(dir, "work"))
+	defer x.Close()
+	pages, err := x.ExportPages(context.Background(), sample, filepath.Join(dir, "out.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) == 0 {
+		t.Fatal("no pages")
+	}
+	for i, raw := range pages {
+		p := ParsePage(raw)
+		if p.Title == "" || p.Created == "" || raw.XML == "" {
+			t.Fatalf("page %d: %+v", i, p)
+		}
+		t.Logf("page %d %q created %s, %d characters, %d pictures unread, authors %v", i+1, p.Title, p.Created, len(p.Text), p.Images, p.Authors)
+	}
+}
+
 func TestExportMissingSection(t *testing.T) {
 	if !Available() {
 		t.Skip("OneNote isn't installed")

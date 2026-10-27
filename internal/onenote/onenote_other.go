@@ -16,6 +16,11 @@ func New(workDir string) *Exporter { return &Exporter{} }
 // Export always fails off Windows.
 func (x *Exporter) Export(ctx context.Context, section, pdf string) error { return ErrUnavailable }
 
+// ExportPages always fails off Windows.
+func (x *Exporter) ExportPages(ctx context.Context, section, pdf string) ([]RawPage, error) {
+	return nil, ErrUnavailable
+}
+
 // Close does nothing.
 func (x *Exporter) Close() {}
 
