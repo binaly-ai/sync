@@ -152,6 +152,19 @@ button.link { color: var(--ochre-deep); text-decoration: underline; text-underli
 .wiz-steps li.past::before { background: var(--line); }
 .wiz-progress { font-size: 13px; color: var(--muted); margin-top: 18px; display: flex; align-items: center; gap: 8px; }
 .path-inline { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+.badge.first { color: var(--ochre-deep); border-color: var(--ochre); }
+.tree-path { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.tree-here { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; margin-bottom: 6px; }
+.tree-here .warn, .tree-status .warn { color: var(--attention); }
+.tree-rows { border-top: 1px solid var(--line); margin-top: 8px; }
+.tree-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.tree-row:last-child { border-bottom: 0; }
+.tree-name { font-family: Consolas, ui-monospace, monospace; font-size: 13px; word-break: break-all; text-align: left; }
+button.tree-name { padding: 0; border: 0; }
+.tree-status { font-size: 13px; color: var(--ink-soft); flex: 1 1 200px; }
+.tree-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.tree-sub { flex-basis: 100%; font-size: 12.5px; margin-top: 2px; }
+.tree-row .note-box { flex-basis: 100%; }
 [hidden] { display: none !important; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .preview-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin-top: 10px; }

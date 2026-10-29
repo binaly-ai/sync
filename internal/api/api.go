@@ -405,3 +405,85 @@ func (c *Client) GetProgress(ctx context.Context) (*ProgressOut, error) {
 	var out ProgressOut
 	return &out, c.do(ctx, "GET", "/sync/v1/progress", nil, &out)
 }
+
+// TreeLevel is one level of a synced folder as the server sees it (the Tree page): each
+// subfolder with how many of its files are in each state, and each file with its state.
+type TreeLevel struct {
+	Path           string            `json:"path"`
+	Files          int               `json:"files"`
+	Counts         map[string]int    `json:"counts"`
+	Mark           *Mark             `json:"mark"`
+	Answer         *FolderAnswer     `json:"answer"`
+	Folders        []TreeFolder      `json:"folders"`
+	FilesHere      []TreeFile        `json:"filesHere"`
+	FilesHereTotal int               `json:"filesHereTotal"`
+	Labels         map[string]string `json:"labels"`
+}
+
+// Mark is a lab member's mark on a folder: "first" or "leave-out", set on this folder (Own) or
+// on one above it.
+type Mark struct {
+	Mark     string `json:"mark"`
+	Path     string `json:"path"`
+	Own      bool   `json:"own"`
+	Computer string `json:"computer"`
+	By       string `json:"by,omitempty"`
+	At       string `json:"at"`
+}
+
+// FolderAnswer is the AI assistant's view of a folder, when it gave one.
+type FolderAnswer struct {
+	Whose   string `json:"whose"`
+	Kind    string `json:"kind"`
+	Held    bool   `json:"held"`
+	Because string `json:"because"`
+}
+
+type TreeFolder struct {
+	Name   string         `json:"name"`
+	Path   string         `json:"path"`
+	Files  int            `json:"files"`
+	Counts map[string]int `json:"counts"`
+	Mark   *Mark          `json:"mark"`
+	Answer *FolderAnswer  `json:"answer"`
+}
+
+type TreeFile struct {
+	Name      string   `json:"name"`
+	Path      string   `json:"path"`
+	State     string   `json:"state"`
+	Detail    string   `json:"detail,omitempty"`
+	Notes     []string `json:"notes"`
+	Verdict   string   `json:"verdict,omitempty"`
+	ReadTo    int      `json:"readTo,omitempty"`
+	PageTotal int      `json:"pageTotal,omitempty"`
+	Size      int64    `json:"size,omitempty"`
+}
+
+// Tree fetches one level of a folder this machine syncs. Older servers answer 404.
+func (c *Client) Tree(ctx context.Context, machineID, path string, offset int) (*TreeLevel, error) {
+	var out TreeLevel
+	return &out, c.do(ctx, "POST", "/sync/v1/tree", map[string]any{"machineId": machineID, "path": path, "offset": offset}, &out)
+}
+
+// MarkOut is the server's answer to a mark: this machine's folders with their exclusions now,
+// so a "Leave out" applies at once.
+type MarkOut struct {
+	Released int      `json:"released"`
+	Folders  []Folder `json:"folders"`
+}
+
+// SetMark marks a folder "first", "leave-out" or "normal" from this machine.
+func (c *Client) SetMark(ctx context.Context, machineID, path, mark string) (*MarkOut, error) {
+	var out MarkOut
+	return &out, c.do(ctx, "POST", "/sync/v1/marks", map[string]any{"machineId": machineID, "path": path, "mark": mark}, &out)
+}
+
+// Release puts held, skipped or failed files at or under a path back in the queue ("Read it").
+func (c *Client) Release(ctx context.Context, machineID, path string) (int, error) {
+	var out struct {
+		Queued []string `json:"queued"`
+	}
+	err := c.do(ctx, "POST", "/sync/v1/release", map[string]any{"machineId": machineID, "path": path}, &out)
+	return len(out.Queued), err
+}

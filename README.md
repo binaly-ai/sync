@@ -54,6 +54,11 @@ Click the tray icon to open Binaly Sync's window:
 - **Status:** each workspace's progress (processed, waiting for the LLM, waiting to upload,
   needs attention), the folders being synced, Add folder, Stop syncing a folder, Sync now,
   Pause (for 1, 6 or 24 hours, or until you resume) and Open in Binaly.
+- **Tree:** this computer's folders, synced or not, with how many of each synced folder's files
+  are processed, waiting, held or left out, and each file's state and notes. Mark a synced
+  folder **Process first** (its files are processed before everything else) or **Leave out**
+  (its files aren't processed, and no computer sends them any more), put held files back with
+  **Read it**, or add a folder that isn't synced yet.
 - **AI assistant:** how to connect your AI assistant (Claude, ChatGPT and others) to the
   workspace, and the prompt that sets up hourly processing in Claude Desktop, with copy buttons.
 - **Settings:** start at Windows sign-in, how updates install, an upload speed limit, and the

@@ -47,6 +47,13 @@ type Backend interface {
 	// FinishWizard records that the first-launch wizard was finished or skipped (for one
 	// workspace's steps, or all when accountKey is "").
 	FinishWizard(accountKey string) error
+	// Tree is one level of the Tree page: this computer's folders with the server's progress
+	// for the synced ones ("" is the top).
+	Tree(accountKey, path string) (any, error)
+	// Mark sets "first", "leave-out" or "normal" on a synced folder.
+	Mark(accountKey, path, mark string) (any, error)
+	// Release puts held files at or under a path back in the queue ("Read it").
+	Release(accountKey, path string) (any, error)
 }
 
 // Links are the only addresses the page can open: a name, never a URL from the page, so the
@@ -67,6 +74,8 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		Minutes    int             `json:"minutes"`
 		Link       string          `json:"link"`
 		FolderID   string          `json:"folderId"`
+		Path       string          `json:"path"`
+		Mark       string          `json:"mark"`
 		Settings   json.RawMessage `json:"settings"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -133,6 +142,17 @@ func Call(b Backend, name string, raw []byte) (any, error) {
 		b.OpenDocs(in.AccountKey)
 	case "wizard-done":
 		return ok, b.FinishWizard(in.AccountKey)
+	case "tree":
+		return b.Tree(in.AccountKey, in.Path)
+	case "mark":
+		switch in.Mark {
+		case "first", "leave-out", "normal":
+		default:
+			return nil, errors.New("unknown mark " + in.Mark)
+		}
+		return b.Mark(in.AccountKey, in.Path, in.Mark)
+	case "release":
+		return b.Release(in.AccountKey, in.Path)
 	default:
 		return nil, errors.New("unknown request " + name)
 	}

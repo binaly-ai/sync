@@ -371,6 +371,7 @@ function renderStatus(s) {
   // The window can open on the AI assistant page before the first status arrives: fill it in
   // once the workspaces are known, or when one is signed in from that page.
   if (!$("view-assistant").hidden && (s.accounts || []).length && !assistantKey) showAssistant();
+  if (!$("view-tree").hidden && (s.accounts || []).length && !treeData) showTree();
   if (!$("view-welcome").hidden) {
     // First status, or a sign-in that just finished: the step's content depends on them.
     const n = (s.accounts || []).length;
@@ -494,10 +495,180 @@ async function loadSettings() {
   $("set-check").value = s.checkMinutes || 15;
 }
 
+// ---- Tree ----
+// This computer's folders, synced or not, with how far each synced folder's files have got
+// (POST /sync/v1/tree on the server), and the lab's marks: "Process first" puts a folder's
+// files ahead of everything else, "Leave out" keeps them from being processed or sent.
+let treeKey = "";
+let treePath = "";
+let treeData = null;
+let treeConfirm = "";
+let treeMsg = "";
+let treeBusy = false;
+const TREE_ORDER = ["processed", "partial", "waiting", "local", "uploading", "sensitive", "failed", "held", "unreachable", "skipped", "left-out", "not-in-scope", "not-read", "gone"];
+const TREE_BAD = new Set(["sensitive", "failed", "held", "unreachable"]);
+const TREE_RELEASE = new Set(["sensitive", "failed", "skipped", "unreachable"]);
+const TREE_MAX_ROWS = 400;
+const baseName = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
+
+function fillTreeWs() {
+  const accts = (last && last.accounts) || [];
+  if (!treeKey || !accts.some((a) => a.key === treeKey)) treeKey = accts[0] ? accts[0].key : "";
+  $("tree-ws").innerHTML = accts.map((a) => `<option value="${esc(a.key)}"${a.key === treeKey ? " selected" : ""}>${esc(a.workspaceName)}</option>`).join("");
+  $("tree-ws-label").hidden = accts.length < 2;
+}
+
+async function showTree(path) {
+  if (path !== undefined) { treePath = path; treeConfirm = ""; }
+  if (!last) { $("tree").innerHTML = `<p class="muted">Loading...</p>`; return; }
+  fillTreeWs();
+  if (!treeKey) {
+    $("tree").innerHTML = `<p class="card">Sign in to a workspace first. <button class="primary" data-signin>Sign in</button></p>`;
+    return;
+  }
+  if (!treeData || (treeData.path || "") !== treePath) $("tree").innerHTML = `<p class="muted">Loading...</p>`;
+  try {
+    treeData = await call("tree", { accountKey: treeKey, path: treePath });
+  } catch (e) {
+    $("tree").innerHTML = `<div class="warning">Couldn't open this folder: ${esc(e.message)}</div>
+      <div class="actions"><button data-tree-open="">Back to the top</button></div>`;
+    return;
+  }
+  renderTree();
+}
+
+function treeCounts(counts, labels) {
+  return TREE_ORDER.filter((k) => counts && counts[k])
+    .map((k) => `<span${TREE_BAD.has(k) ? ' class="warn"' : ""}>${fmt(counts[k])} ${esc((labels && labels[k]) || k)}</span>`)
+    .join(" · ");
+}
+
+function markBadge(m) {
+  if (!m) return "";
+  const what = m.mark === "first" ? "Process first" : "Left out";
+  const who = `${m.own ? "" : "From " + m.path + ". "}Set on ${m.computer}${m.by ? " by " + m.by : ""}, ${String(m.at).slice(0, 10)}`;
+  return `<span class="badge${m.mark === "first" ? " first" : ""}" title="${esc(who)}">${what}</span>`;
+}
+
+// The buttons for a synced folder: what its own mark allows, and "Read it" when files wait on a person.
+function folderActions(path, mark, counts, isRoot) {
+  const own = mark && mark.own ? mark.mark : "";
+  const b = [];
+  if (own === "first") b.push(`<button class="small" data-tree-mark="normal" data-path="${esc(path)}">Normal</button>`);
+  else if (own === "leave-out") b.push(`<button class="small" data-tree-mark="normal" data-path="${esc(path)}">Undo leave out</button>`);
+  else {
+    b.push(`<button class="small" data-tree-mark="first" data-path="${esc(path)}">Process first</button>`);
+    if (!isRoot) b.push(`<button class="small quiet" data-tree-leave="${esc(path)}">Leave out</button>`);
+  }
+  if (counts && counts.sensitive) b.push(`<button class="small quiet" data-tree-release="${esc(path)}">Read it</button>`);
+  return `<span class="tree-actions">${b.join("")}</span>`;
+}
+
+function leaveConfirm(path, files) {
+  return `<div class="note-box"><b>Leave out ${esc(baseName(path))}?</b> Binaly won't process ${files ? `its ${fmt(files)} files` : "its files"}, and no computer will send them any more. Files already in Binaly stay there, with any notes made from them. You can undo this.
+    <div class="actions"><button class="primary" data-tree-mark="leave-out" data-path="${esc(path)}">Leave out</button><button class="quiet" data-tree-cancel>Cancel</button></div></div>`;
+}
+
+function renderTree() {
+  const d = treeData || {};
+  const msg = treeMsg ? `<div class="note-box">${esc(treeMsg)}</div>` : "";
+  if (!d.path) {
+    const link = (p) => `<div class="tree-row"><button class="tree-name link" data-tree-open="${esc(p)}">${esc(p)}</button></div>`;
+    $("tree").innerHTML = msg + `<div class="card"><h2 style="margin-top:0">Synced from this computer</h2>${(d.synced || []).map(link).join("") || `<p class="muted">No folders synced from this computer yet.</p>`}</div>
+      <div class="card"><h2 style="margin-top:0">Browse this computer</h2><p class="muted">Find a folder that isn't synced yet, and add it.</p>${(d.places || []).map(link).join("")}</div>`;
+    return;
+  }
+  const lvl = d.level;
+  const labels = (lvl && lvl.labels) || {};
+  const isRoot = !!d.syncedRoot && d.path.toLowerCase() === d.syncedRoot.toLowerCase();
+  const here = d.syncedRoot
+    ? `<div class="tree-here">${lvl ? `${fmt(lvl.files)} file${lvl.files === 1 ? "" : "s"} in Binaly${lvl.files ? ": " + treeCounts(lvl.counts, labels) : ""} ${markBadge(lvl.mark)}` : ""}
+        ${lvl ? folderActions(d.path, lvl.mark, lvl.counts, isRoot) : ""}</div>
+        ${lvl && lvl.answer ? `<p class="muted tree-sub">The AI assistant's view of this folder: ${esc(lvl.answer.because)}</p>` : ""}
+        ${treeConfirm === d.path ? leaveConfirm(d.path, lvl && lvl.files) : ""}`
+    : `<p class="muted">Not synced.${(d.entries || []).some((e) => e.holdsSynced) ? " A synced folder is inside it." : ""}</p>
+       <div class="actions"><button class="primary" data-tree-add="${esc(d.path)}">Sync this folder...</button></div>`;
+  const rows = (d.entries || []).slice(0, TREE_MAX_ROWS).map((e) => {
+    const gone = !e.local ? ` <span class="muted">(not on this computer)</span>` : "";
+    if (e.dir) {
+      const f = e.folder;
+      const status = e.synced
+        ? (f ? treeCounts(f.counts, labels) : `<span class="muted">nothing in Binaly yet</span>`)
+        : e.holdsSynced ? `<span class="muted">a synced folder is inside</span>` : `<span class="muted">not synced</span>`;
+      const actions = e.synced && f ? folderActions(e.path, f.mark, f.counts, false)
+        : !e.synced && !e.holdsSynced ? `<span class="tree-actions"><button class="small quiet" data-tree-add="${esc(e.path)}">Add</button></span>` : "";
+      return `<div class="tree-row">
+        <button class="tree-name link" data-tree-open="${esc(e.path)}">${esc(e.name)}</button>${gone}
+        ${f ? markBadge(f.mark) : ""}
+        <span class="tree-status">${status}</span>${actions}
+        ${f && f.answer ? `<div class="tree-sub muted">${esc(f.answer.because)}</div>` : ""}
+        ${treeConfirm === e.path ? leaveConfirm(e.path, f && f.files) : ""}
+      </div>`;
+    }
+    const f = e.file;
+    const state = f ? `<span${TREE_BAD.has(f.state) ? ' class="warn"' : ""}>${esc(labels[f.state] || f.state)}</span>`
+      : e.synced ? `<span class="muted">not in Binaly yet</span>` : "";
+    const notes = f && (f.notes || []).length ? "Notes: " + f.notes.join(", ") : "";
+    const detail = f && f.detail && f.detail !== (f.notes || []).join(", ") ? f.detail : "";
+    const sub = [detail, notes].filter(Boolean).join(" · ");
+    return `<div class="tree-row file">
+      <span class="tree-name">${esc(e.name)}</span>${gone}
+      <span class="tree-status">${state}${e.size ? ` <span class="muted">${human(e.size)}</span>` : ""}</span>
+      ${f && TREE_RELEASE.has(f.state) ? `<span class="tree-actions"><button class="small quiet" data-tree-release="${esc(e.path)}">Read it</button></span>` : ""}
+      ${sub ? `<div class="tree-sub muted">${esc(sub)}</div>` : ""}
+    </div>`;
+  }).join("");
+  const more = (d.entries || []).length > TREE_MAX_ROWS ? `<p class="muted">And ${fmt(d.entries.length - TREE_MAX_ROWS)} more.</p>` : "";
+  $("tree").innerHTML = msg + `<div class="card">
+    <div class="tree-path"><button class="small quiet" data-tree-open="">Top</button>${d.parent ? `<button class="small quiet" data-tree-open="${esc(d.parent)}">Up</button>` : ""}<span class="path-inline">${esc(d.path)}</span></div>
+    ${here}
+    ${d.serverNote ? `<div class="warning">${esc(d.serverNote)}</div>` : ""}
+    ${d.localError ? `<div class="warning">${esc(d.localError)}</div>` : ""}
+    <div class="tree-rows">${rows || `<p class="muted">This folder is empty.</p>`}</div>${more}
+  </div>`;
+}
+
+// One Tree action at a time; its result is said above the tree, which is then shown again.
+async function treeAction(fn, done) {
+  if (treeBusy) return;
+  treeBusy = true;
+  treeMsg = "";
+  try {
+    treeMsg = done((await fn()) || {});
+  } catch (e) {
+    treeMsg = e.message;
+  }
+  treeBusy = false;
+  treeConfirm = "";
+  showTree();
+}
+
+async function treeClick(t) {
+  if (t.dataset.treeOpen !== undefined) { treeMsg = ""; showTree(t.dataset.treeOpen); return true; }
+  if (t.dataset.treeAdd) { go("preview?folder=" + encodeURIComponent(t.dataset.treeAdd)); return true; }
+  if (t.dataset.treeLeave) { treeConfirm = t.dataset.treeLeave; renderTree(); return true; }
+  if (t.hasAttribute("data-tree-cancel")) { treeConfirm = ""; renderTree(); return true; }
+  if (t.dataset.treeMark) {
+    const mark = t.dataset.treeMark, path = t.dataset.path, name = baseName(path);
+    await treeAction(() => call("mark", { accountKey: treeKey, path, mark }), (r) =>
+      mark === "first" ? `${name} comes first now: its files are processed before everything else.${r.released ? ` ${fmt(r.released)} held file${r.released === 1 ? " goes" : "s go"} back to be read.` : ""}`
+      : mark === "leave-out" ? `${name} is left out. Binaly won't process its files, and no computer will send them any more.`
+      : `${name} is back to normal.`);
+    return true;
+  }
+  if (t.dataset.treeRelease) {
+    const path = t.dataset.treeRelease;
+    await treeAction(() => call("release", { accountKey: treeKey, path }), (r) =>
+      r.queued ? `${fmt(r.queued)} file${r.queued === 1 ? "" : "s"} will be read at the next processing run.` : "Nothing there was held back.");
+    return true;
+  }
+  return false;
+}
+
 // ---- routing ----
 function route() {
   const [screen, query] = (current || "status").split("?");
-  for (const v of ["welcome", "status", "preview", "assistant", "settings", "about"]) $("view-" + v).hidden = v !== screen;
+  for (const v of ["welcome", "status", "tree", "preview", "assistant", "settings", "about"]) $("view-" + v).hidden = v !== screen;
   // The wizard has its own way forward; the menu comes back when it's done.
   $("nav").hidden = screen === "welcome" || (screen === "preview" && previewWizard);
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === screen));
@@ -514,6 +685,7 @@ function route() {
   }
   if (screen === "settings") loadSettings();
   if (screen === "assistant") showAssistant();
+  if (screen === "tree") showTree();
 }
 // Screens are "welcome", "status", "assistant", "settings" or "preview?folder=...". The program opens one with
 // binalyShow, e.g. after the tray's "Add folder...".
@@ -591,6 +763,7 @@ document.addEventListener("click", async (ev) => {
       stopping = "";
       poll();
     }
+    else if (await treeClick(t)) { /* the Tree page */ }
     else if (t.id === "btn-log") await call("log", {});
     else if (t.dataset.link) await call("open-link", { link: t.dataset.link });
     else if (t.id === "btn-check" || t.hasAttribute("data-check")) {
@@ -619,4 +792,5 @@ setInterval(poll, 2000);
 document.addEventListener("change", (ev) => {
   if (ev.target && ev.target.id === "ws-pick") updateInsideNote();
   if (ev.target && ev.target.id === "as-ws") { assistantKey = ev.target.value; assistantTab = 0; showAssistant(); }
+  if (ev.target && ev.target.id === "tree-ws") { treeKey = ev.target.value; treeData = null; showTree(""); }
 });
