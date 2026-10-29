@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -64,8 +66,43 @@ func (c *Client) http() *http.Client {
 // gatewayRetryWait is how long a call waits before its one retry after a 502, 503 or 504.
 var gatewayRetryWait = 2 * time.Second
 
+// When the server says it is busy (503, error "busy", with Retry-After), a call waits a random
+// time around Retry-After and sends again: never more than busyWaitMax per wait, never more than
+// busyBudget in all. Past that it gives up, and the next sync - minutes later, never hours -
+// tries again. Random, so a lab's computers don't all come back at the same moment.
+var (
+	busyWaitMax = 2 * time.Minute
+	busyBudget  = 5 * time.Minute
+)
+
+// busyDelay is the wait after a "busy" answer: Retry-After (15 s if absent) times a random
+// factor between 0.5 and 1.5, capped at busyWaitMax.
+func busyDelay(retryAfter string) time.Duration {
+	base := 15 * time.Second
+	if n, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && n > 0 {
+		base = time.Duration(n) * time.Second
+	}
+	d := time.Duration(float64(base) * (0.5 + rand.Float64()))
+	if d > busyWaitMax {
+		d = busyWaitMax
+	}
+	return d
+}
+
+// isBusy: the server's own "busy, retry later", not a proxy's 503.
+func isBusy(status int, raw []byte) bool {
+	if status != http.StatusServiceUnavailable {
+		return false
+	}
+	var b struct {
+		Error string `json:"error"`
+	}
+	return json.Unmarshal(raw, &b) == nil && b.Error == "busy"
+}
+
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	retriedGateway := false
+	var busyWaited time.Duration
 	for attempt := 0; attempt < 2; attempt++ {
 		tok, err := c.Tokens.Token(ctx)
 		if err != nil {
@@ -94,6 +131,22 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		if res.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			// The access token expired early or was revoked; refresh once and retry.
 			c.Tokens.Invalidate()
+			continue
+		}
+		// The server is busy: wait and send again, within busyBudget. Every call is safe to
+		// repeat (see below).
+		if isBusy(res.StatusCode, raw) {
+			d := busyDelay(res.Header.Get("Retry-After"))
+			if busyWaited+d > busyBudget {
+				return &Error{Status: res.StatusCode, Code: "busy", Detail: "the server stayed busy; the next sync sends this again"}
+			}
+			busyWaited += d
+			attempt--
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(d):
+			}
 			continue
 		}
 		// A proxy's 502/503/504 (a dropped connection, a restart) is retried once. Every call
