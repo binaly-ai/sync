@@ -663,7 +663,7 @@ function fileNode(e, labels) {
   const tip = [detail, notes ? "Notes: " + notes : ""].filter(Boolean).join("\n");
   return `<div class="tn"><div class="tn-row file"${tip ? ` title="${esc(tip)}"` : ""}>
       <span class="tn-spacer"></span>${ICON_FILE}<span class="tn-name">${esc(e.name)}</span>${gone}
-      <span class="tn-status">${state}${e.size ? ` <span class="muted">${human(e.size)}</span>` : ""}${notes ? ` <span class="tn-notes muted">${esc(notes)}</span>` : ""}</span>
+      <span class="tn-status">${state}${e.size ? ` <span class="muted tn-size">${human(e.size)}</span>` : ""}${notes ? ` <span class="tn-notes muted">${esc(notes)}</span>` : ""}</span>
       ${f && TREE_RELEASE.has(f.state) ? `<span class="tn-act"><button class="small quiet" data-tree-release="${esc(e.path)}">Read it</button></span>` : ""}
     </div></div>`;
 }

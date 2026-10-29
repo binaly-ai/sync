@@ -174,6 +174,9 @@ func (a *trayApp) Tree(accountKey, path string) (any, error) {
 			v.Level = lvl
 			for i := range lvl.Folders {
 				f := &lvl.Folders[i]
+				if rules.Ignores(f.Name) {
+					continue // a folder Sync never walks (OneNote_RecycleBin), known only from older runs
+				}
 				e := add(treeEntry{Name: f.Name, Path: f.Path, Dir: true, Synced: true})
 				e.Folder = f
 			}

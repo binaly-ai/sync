@@ -39,7 +39,7 @@ func (s *treeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/sync/v1/hello":
 		json.NewEncoder(w).Encode(map[string]any{
 			"machineId": "m1",
-			"policy":    map[string]any{"excludeNames": []string{"Thumbs.db"}, "excludeDirs": []string{".git"}},
+			"policy":    map[string]any{"excludeNames": []string{"Thumbs.db"}, "excludeDirs": []string{".git", "OneNote_RecycleBin"}},
 			"folders":   []map[string]any{{"id": "f1", "path": s.root, "exclusions": []string{}}},
 		})
 	case "/sync/v1/tree":
@@ -47,7 +47,7 @@ func (s *treeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.asked = append(s.asked, p)
 		json.NewEncoder(w).Encode(map[string]any{
 			"ok": true, "path": p, "files": 3, "counts": map[string]int{"processed": 1, "waiting": 1, "sensitive": 1},
-			"folders": []map[string]any{{
+			"folders": []map[string]any{{"name": "OneNote_RecycleBin", "path": p + `\OneNote_RecycleBin`, "files": 2, "counts": map[string]int{"gone": 2}}, {
 				"name": "Data", "path": p + `\Data`, "files": 2, "counts": map[string]int{"processed": 1, "waiting": 1},
 				"mark": map[string]any{"mark": "first", "path": p + `\Data`, "own": true, "computer": "LAB-PC-2", "at": "2026-10-29T10:00:00Z"},
 			}},
@@ -122,6 +122,9 @@ func TestTreeMergesThisComputerWithTheServer(t *testing.T) {
 	by := map[string]treeEntry{}
 	for _, e := range v.Entries {
 		by[e.Name] = e
+	}
+	if _, ok := by["OneNote_RecycleBin"]; ok {
+		t.Error("a folder Sync never walks is listed because the server still has rows for it")
 	}
 	if _, ok := by["Thumbs.db"]; ok {
 		t.Error("a built-in excluded file is listed")
