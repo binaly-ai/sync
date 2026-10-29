@@ -496,20 +496,34 @@ async function loadSettings() {
 }
 
 // ---- Tree ----
-// This computer's folders, synced or not, with how far each synced folder's files have got
-// (POST /sync/v1/tree on the server), and the lab's marks: "Process first" puts a folder's
-// files ahead of everything else, "Leave out" keeps them from being processed or sent.
+// This computer's folders as a tree that opens in place, like File Explorer: the synced folders
+// first, with how far each one's files have got (POST /sync/v1/tree on the server), then the
+// computer's own places, to find a folder that isn't synced yet. Pointing at a folder shows its
+// buttons: "Process first" puts its files ahead of everything else, "Leave out" keeps them from
+// being processed or sent.
 let treeKey = "";
-let treePath = "";
-let treeData = null;
+let treeData = null; // the top: synced folders and places
+const treeNodes = new Map(); // path -> that folder's level, as the program returned it
+const treeOpen = new Map(); // folders shown open: where in the tree (section and path) -> path
+const treeLoading = new Set();
 let treeConfirm = "";
 let treeMsg = "";
 let treeBusy = false;
 const TREE_ORDER = ["processed", "partial", "waiting", "local", "uploading", "sensitive", "failed", "held", "unreachable", "skipped", "left-out", "not-in-scope", "not-read", "gone"];
 const TREE_BAD = new Set(["sensitive", "failed", "held", "unreachable"]);
 const TREE_RELEASE = new Set(["sensitive", "failed", "skipped", "unreachable"]);
-const TREE_MAX_ROWS = 400;
+// The mini bar's parts, in the status page's colors: done, in Binaly, on its way, needs a person.
+const TREE_BAR = [
+  ["processed", ["processed", "partial"]],
+  ["waiting", ["waiting", "local"]],
+  ["toUpload", ["uploading"]],
+  ["attention", ["sensitive", "failed", "held", "unreachable"]],
+];
+const TREE_MAX_ROWS = 300;
 const baseName = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
+const keyOf = (p) => String(p).toLowerCase();
+const ICON_DIR = `<svg class="tn-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.5h4l1.5 1.5h7.5v8h-13z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+const ICON_FILE = `<svg class="tn-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 1.5h6l3 3v10h-9z M9.5 1.5v3h3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
 
 function fillTreeWs() {
   const accts = (last && last.accounts) || [];
@@ -518,22 +532,47 @@ function fillTreeWs() {
   $("tree-ws-label").hidden = accts.length < 2;
 }
 
-async function showTree(path) {
-  if (path !== undefined) { treePath = path; treeConfirm = ""; }
+async function loadNode(path) {
+  treeLoading.add(keyOf(path));
+  try {
+    treeNodes.set(keyOf(path), await call("tree", { accountKey: treeKey, path }));
+  } catch (e) {
+    treeNodes.set(keyOf(path), { path, entries: [], localError: e.message });
+  }
+  treeLoading.delete(keyOf(path));
+}
+
+// showTree("") starts again from the top; showTree() reloads what is on screen.
+async function showTree(reset) {
   if (!last) { $("tree").innerHTML = `<p class="muted">Loading...</p>`; return; }
   fillTreeWs();
   if (!treeKey) {
     $("tree").innerHTML = `<p class="card">Sign in to a workspace first. <button class="primary" data-signin>Sign in</button></p>`;
     return;
   }
-  if (!treeData || (treeData.path || "") !== treePath) $("tree").innerHTML = `<p class="muted">Loading...</p>`;
+  if (reset === "" || !treeData) {
+    treeNodes.clear();
+    treeOpen.clear();
+    treeConfirm = "";
+    $("tree").innerHTML = `<p class="muted">Loading...</p>`;
+  }
   try {
-    treeData = await call("tree", { accountKey: treeKey, path: treePath });
+    treeData = await call("tree", { accountKey: treeKey, path: "" });
   } catch (e) {
-    $("tree").innerHTML = `<div class="warning">Couldn't open this folder: ${esc(e.message)}</div>
-      <div class="actions"><button data-tree-open="">Back to the top</button></div>`;
+    $("tree").innerHTML = `<div class="warning">Couldn't load this computer's folders: ${esc(e.message)}</div>`;
     return;
   }
+  // The synced folders' own counts, and every open folder, fresh.
+  const want = [...(treeData.synced || []), ...treeOpen.values()];
+  await Promise.all([...new Map(want.map((p) => [keyOf(p), p])).values()].map(loadNode));
+  renderTree();
+}
+
+async function toggleNode(where, path) {
+  const k = keyOf(path);
+  if (treeOpen.has(where)) { treeOpen.delete(where); renderTree(); return; }
+  treeOpen.set(where, path);
+  if (!treeNodes.has(k)) { treeLoading.add(k); renderTree(); await loadNode(path); }
   renderTree();
 }
 
@@ -543,14 +582,24 @@ function treeCounts(counts, labels) {
     .join(" · ");
 }
 
+function miniBar(counts, files) {
+  if (!files) return `<span class="tn-bar empty"></span>`;
+  const parts = TREE_BAR.map(([cls, keys]) => {
+    const n = keys.reduce((a, k) => a + ((counts && counts[k]) || 0), 0);
+    return n ? `<span class="${cls}" style="width:${(100 * n) / files}%"></span>` : "";
+  }).join("");
+  return `<span class="tn-bar">${parts}</span>`;
+}
+
+// Only a folder's own mark: the folders inside it sit under its badge.
 function markBadge(m) {
-  if (!m) return "";
-  const what = m.mark === "first" ? "Process first" : "Left out";
-  const who = `${m.own ? "" : "From " + m.path + ". "}Set on ${m.computer}${m.by ? " by " + m.by : ""}, ${String(m.at).slice(0, 10)}`;
+  if (!m || !m.own) return "";
+  const what = m.mark === "first" ? "First" : "Left out";
+  const who = `${m.mark === "first" ? "Process first" : "Left out"}. Set on ${m.computer}${m.by ? " by " + m.by : ""}, ${String(m.at).slice(0, 10)}`;
   return `<span class="badge${m.mark === "first" ? " first" : ""}" title="${esc(who)}">${what}</span>`;
 }
 
-// The buttons for a synced folder: what its own mark allows, and "Read it" when files wait on a person.
+// A synced folder's buttons: what its own mark allows, and "Read it" when files wait on a person.
 function folderActions(path, mark, counts, isRoot) {
   const own = mark && mark.own ? mark.mark : "";
   const b = [];
@@ -561,74 +610,87 @@ function folderActions(path, mark, counts, isRoot) {
     if (!isRoot) b.push(`<button class="small quiet" data-tree-leave="${esc(path)}">Leave out</button>`);
   }
   if (counts && counts.sensitive) b.push(`<button class="small quiet" data-tree-release="${esc(path)}">Read it</button>`);
-  return `<span class="tree-actions">${b.join("")}</span>`;
+  return `<span class="tn-act${own ? " keep" : ""}">${b.join("")}</span>`;
 }
 
 function leaveConfirm(path, files) {
-  return `<div class="note-box"><b>Leave out ${esc(baseName(path))}?</b> Binaly won't process ${files ? `its ${fmt(files)} files` : "its files"}, and no computer will send them any more. Files already in Binaly stay there, with any notes made from them. You can undo this.
+  return `<div class="note-box tn-confirm"><b>Leave out ${esc(baseName(path))}?</b> Binaly won't process ${files ? `its ${fmt(files)} files` : "its files"}, and no computer will send them any more. Files already in Binaly stay there, with any notes made from them. You can undo this.
     <div class="actions"><button class="primary" data-tree-mark="leave-out" data-path="${esc(path)}">Leave out</button><button class="quiet" data-tree-cancel>Cancel</button></div></div>`;
+}
+
+// One folder: its row, and when open, its children inside a guide line.
+function folderNode(e, labels, isRoot, section) {
+  const k = keyOf(e.path);
+  const where = section + "|" + k;
+  const open = treeOpen.has(where);
+  const node = treeNodes.get(k);
+  const lvl = node && node.level;
+  // A folder's own level (once loaded) is fresher and complete; the parent's row is the fallback.
+  const f = lvl ? { files: lvl.files, counts: lvl.counts, mark: lvl.mark, answer: lvl.answer } : e.folder;
+  const gone = e.local === false ? ` <span class="muted">(not on this computer)</span>` : "";
+  let status, actions = "";
+  if (e.synced) {
+    status = f ? `${miniBar(f.counts, f.files)}<span class="tn-counts">${f.files ? treeCounts(f.counts, (lvl && lvl.labels) || labels) : "nothing in Binaly yet"}</span>`
+      : `<span class="tn-counts muted">nothing in Binaly yet</span>`;
+    if (f) actions = folderActions(e.path, f.mark, f.counts, isRoot);
+  } else {
+    status = `<span class="tn-counts muted">${e.holdsSynced ? "a synced folder is inside" : "not synced"}</span>`;
+    if (!e.holdsSynced) actions = `<span class="tn-act"><button class="small quiet" data-tree-add="${esc(e.path)}">Add</button></span>`;
+  }
+  const row = `<div class="tn-row${e.synced ? "" : " unsynced"}">
+      <button class="tn-toggle" data-tree-open="${esc(e.path)}" data-where="${esc(where)}" aria-expanded="${open}" title="${esc(e.path)}">
+        <span class="tn-chev${open ? " open" : ""}" aria-hidden="true"></span>${ICON_DIR}<span class="tn-name">${esc(e.name)}</span>
+      </button>${gone}${f ? markBadge(f.mark) : ""}
+      <span class="tn-status">${status}</span>${actions}
+    </div>`;
+  const why = f && f.answer && open ? `<div class="tn-why muted">The AI assistant's view of this folder: ${esc(f.answer.because)}</div>` : "";
+  const confirm = treeConfirm === e.path ? leaveConfirm(e.path, f && f.files) : "";
+  let kids = "";
+  if (open) {
+    if (treeLoading.has(k) || !node) kids = `<div class="tn-kids"><div class="tn-note muted">Loading...</div></div>`;
+    else kids = `<div class="tn-kids">${why}${children(node, section)}</div>`;
+  }
+  return `<div class="tn">${row}${confirm}${kids}</div>`;
+}
+
+function fileNode(e, labels) {
+  const f = e.file;
+  const gone = e.local === false ? ` <span class="muted">(not on this computer)</span>` : "";
+  const state = f ? `<span class="tn-state${TREE_BAD.has(f.state) ? " warn" : ""}">${esc(labels[f.state] || f.state)}</span>`
+    : e.synced ? `<span class="tn-state muted">not in Binaly yet</span>` : "";
+  const notes = f && (f.notes || []).length ? f.notes.join(", ") : "";
+  const detail = f && f.detail && f.detail !== notes ? f.detail : "";
+  const tip = [detail, notes ? "Notes: " + notes : ""].filter(Boolean).join("\n");
+  return `<div class="tn"><div class="tn-row file"${tip ? ` title="${esc(tip)}"` : ""}>
+      <span class="tn-spacer"></span>${ICON_FILE}<span class="tn-name">${esc(e.name)}</span>${gone}
+      <span class="tn-status">${state}${e.size ? ` <span class="muted">${human(e.size)}</span>` : ""}${notes ? ` <span class="tn-notes muted">${esc(notes)}</span>` : ""}</span>
+      ${f && TREE_RELEASE.has(f.state) ? `<span class="tn-act"><button class="small quiet" data-tree-release="${esc(e.path)}">Read it</button></span>` : ""}
+    </div></div>`;
+}
+
+function children(node, section) {
+  const labels = (node.level && node.level.labels) || {};
+  const notes = [node.serverNote, node.localError].filter(Boolean).map((x) => `<div class="tn-note warn">${esc(x)}</div>`).join("");
+  const entries = node.entries || [];
+  const rows = entries.slice(0, TREE_MAX_ROWS).map((e) => (e.dir ? folderNode(e, labels, false, section) : fileNode(e, labels))).join("");
+  const more = entries.length > TREE_MAX_ROWS ? `<div class="tn-note muted">And ${fmt(entries.length - TREE_MAX_ROWS)} more.</div>` : "";
+  return notes + (rows || (notes ? "" : `<div class="tn-note muted">Empty.</div>`)) + more;
 }
 
 function renderTree() {
   const d = treeData || {};
   const msg = treeMsg ? `<div class="note-box">${esc(treeMsg)}</div>` : "";
-  if (!d.path) {
-    const link = (p) => `<div class="tree-row"><button class="tree-name link" data-tree-open="${esc(p)}">${esc(p)}</button></div>`;
-    $("tree").innerHTML = msg + `<div class="card"><h2 style="margin-top:0">Synced from this computer</h2>${(d.synced || []).map(link).join("") || `<p class="muted">No folders synced from this computer yet.</p>`}</div>
-      <div class="card"><h2 style="margin-top:0">Browse this computer</h2><p class="muted">Find a folder that isn't synced yet, and add it.</p>${(d.places || []).map(link).join("")}</div>`;
-    return;
-  }
-  const lvl = d.level;
-  const labels = (lvl && lvl.labels) || {};
-  const isRoot = !!d.syncedRoot && d.path.toLowerCase() === d.syncedRoot.toLowerCase();
-  const here = d.syncedRoot
-    ? `<div class="tree-here">${lvl ? `${fmt(lvl.files)} file${lvl.files === 1 ? "" : "s"} in Binaly${lvl.files ? ": " + treeCounts(lvl.counts, labels) : ""} ${markBadge(lvl.mark)}` : ""}
-        ${lvl ? folderActions(d.path, lvl.mark, lvl.counts, isRoot) : ""}</div>
-        ${lvl && lvl.answer ? `<p class="muted tree-sub">The AI assistant's view of this folder: ${esc(lvl.answer.because)}</p>` : ""}
-        ${treeConfirm === d.path ? leaveConfirm(d.path, lvl && lvl.files) : ""}`
-    : `<p class="muted">Not synced.${(d.entries || []).some((e) => e.holdsSynced) ? " A synced folder is inside it." : ""}</p>
-       <div class="actions"><button class="primary" data-tree-add="${esc(d.path)}">Sync this folder...</button></div>`;
-  const rows = (d.entries || []).slice(0, TREE_MAX_ROWS).map((e) => {
-    const gone = !e.local ? ` <span class="muted">(not on this computer)</span>` : "";
-    if (e.dir) {
-      const f = e.folder;
-      const status = e.synced
-        ? (f ? treeCounts(f.counts, labels) : `<span class="muted">nothing in Binaly yet</span>`)
-        : e.holdsSynced ? `<span class="muted">a synced folder is inside</span>` : `<span class="muted">not synced</span>`;
-      const actions = e.synced && f ? folderActions(e.path, f.mark, f.counts, false)
-        : !e.synced && !e.holdsSynced ? `<span class="tree-actions"><button class="small quiet" data-tree-add="${esc(e.path)}">Add</button></span>` : "";
-      return `<div class="tree-row">
-        <button class="tree-name link" data-tree-open="${esc(e.path)}">${esc(e.name)}</button>${gone}
-        ${f ? markBadge(f.mark) : ""}
-        <span class="tree-status">${status}</span>${actions}
-        ${f && f.answer ? `<div class="tree-sub muted">${esc(f.answer.because)}</div>` : ""}
-        ${treeConfirm === e.path ? leaveConfirm(e.path, f && f.files) : ""}
-      </div>`;
-    }
-    const f = e.file;
-    const state = f ? `<span${TREE_BAD.has(f.state) ? ' class="warn"' : ""}>${esc(labels[f.state] || f.state)}</span>`
-      : e.synced ? `<span class="muted">not in Binaly yet</span>` : "";
-    const notes = f && (f.notes || []).length ? "Notes: " + f.notes.join(", ") : "";
-    const detail = f && f.detail && f.detail !== (f.notes || []).join(", ") ? f.detail : "";
-    const sub = [detail, notes].filter(Boolean).join(" · ");
-    return `<div class="tree-row file">
-      <span class="tree-name">${esc(e.name)}</span>${gone}
-      <span class="tree-status">${state}${e.size ? ` <span class="muted">${human(e.size)}</span>` : ""}</span>
-      ${f && TREE_RELEASE.has(f.state) ? `<span class="tree-actions"><button class="small quiet" data-tree-release="${esc(e.path)}">Read it</button></span>` : ""}
-      ${sub ? `<div class="tree-sub muted">${esc(sub)}</div>` : ""}
+  const synced = (d.synced || []).map((p) => folderNode({ name: p, path: p, dir: true, local: true, synced: true }, {}, true, "s")).join("");
+  const places = (d.places || []).map((p) => folderNode({ name: p, path: p, dir: true, local: true, synced: false, holdsSynced: (d.synced || []).some((s) => keyOf(s).startsWith(keyOf(p).replace(/[\\/]$/, "") + "\\")) }, {}, false, "c")).join("");
+  $("tree").innerHTML = msg + `<div class="card tree">
+      <div class="tn-head">Synced from this computer</div>
+      ${synced || `<div class="tn-note muted">No folders synced from this computer yet.</div>`}
+      <div class="tn-head">This computer</div>
+      ${places}
     </div>`;
-  }).join("");
-  const more = (d.entries || []).length > TREE_MAX_ROWS ? `<p class="muted">And ${fmt(d.entries.length - TREE_MAX_ROWS)} more.</p>` : "";
-  $("tree").innerHTML = msg + `<div class="card">
-    <div class="tree-path"><button class="small quiet" data-tree-open="">Top</button>${d.parent ? `<button class="small quiet" data-tree-open="${esc(d.parent)}">Up</button>` : ""}<span class="path-inline">${esc(d.path)}</span></div>
-    ${here}
-    ${d.serverNote ? `<div class="warning">${esc(d.serverNote)}</div>` : ""}
-    ${d.localError ? `<div class="warning">${esc(d.localError)}</div>` : ""}
-    <div class="tree-rows">${rows || `<p class="muted">This folder is empty.</p>`}</div>${more}
-  </div>`;
 }
 
-// One Tree action at a time; its result is said above the tree, which is then shown again.
+// One Tree action at a time; its result is said above the tree, and what's open is reloaded.
 async function treeAction(fn, done) {
   if (treeBusy) return;
   treeBusy = true;
@@ -640,11 +702,11 @@ async function treeAction(fn, done) {
   }
   treeBusy = false;
   treeConfirm = "";
-  showTree();
+  await showTree();
 }
 
 async function treeClick(t) {
-  if (t.dataset.treeOpen !== undefined) { treeMsg = ""; showTree(t.dataset.treeOpen); return true; }
+  if (t.dataset.treeOpen !== undefined) { await toggleNode(t.dataset.where, t.dataset.treeOpen); return true; }
   if (t.dataset.treeAdd) { go("preview?folder=" + encodeURIComponent(t.dataset.treeAdd)); return true; }
   if (t.dataset.treeLeave) { treeConfirm = t.dataset.treeLeave; renderTree(); return true; }
   if (t.hasAttribute("data-tree-cancel")) { treeConfirm = ""; renderTree(); return true; }
