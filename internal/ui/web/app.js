@@ -825,7 +825,7 @@ document.addEventListener("click", async (ev) => {
       stopping = "";
       poll();
     }
-    else if (await treeClick(t)) { /* the Tree page */ }
+    else if (await treeClick(t)) { /* the Files page */ }
     else if (t.id === "btn-log") await call("log", {});
     else if (t.dataset.link) await call("open-link", { link: t.dataset.link });
     else if (t.id === "btn-check" || t.hasAttribute("data-check")) {

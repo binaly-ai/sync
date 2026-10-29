@@ -1,6 +1,6 @@
 package main
 
-// The Tree page (the server's docs/sync-plan.md 4.7a): this computer's folders, synced or not,
+// The Files page (the server's docs/sync-plan.md 4.7a): this computer's folders, synced or not,
 // with how far each synced folder's files have got, and the lab's marks. The folders come from
 // this computer's own disk, so a folder that was never added shows as "not synced"; the states
 // come from the server, one level at a time.

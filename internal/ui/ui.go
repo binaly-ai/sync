@@ -47,7 +47,7 @@ type Backend interface {
 	// FinishWizard records that the first-launch wizard was finished or skipped (for one
 	// workspace's steps, or all when accountKey is "").
 	FinishWizard(accountKey string) error
-	// Tree is one level of the Tree page: this computer's folders with the server's progress
+	// Tree is one level of the Files page: this computer's folders with the server's progress
 	// for the synced ones ("" is the top).
 	Tree(accountKey, path string) (any, error)
 	// Mark sets "first", "leave-out" or "normal" on a synced folder.
