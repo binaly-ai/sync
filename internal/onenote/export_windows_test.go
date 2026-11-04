@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +43,15 @@ func TestExportSample(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(filepath.Join(dir, "work")); len(left) != 0 {
 		t.Fatalf("working copies left behind: %d", len(left))
+	}
+	// Nothing of ours stays open in OneNote: not a notebook, not a loose section under "Open
+	// Sections". Exports used to leave one open section each, until OneNote crashed under them.
+	open, err := x.open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(open), strings.ToLower(dir)) {
+		t.Fatalf("OneNote still has a working copy open:\n%s", open)
 	}
 }
 

@@ -21,6 +21,33 @@ type RawPage struct {
 	XML          string
 }
 
+// hierarchySection finds, in a GetHierarchy result, the ID of the section stored at path
+// (compared without regard to case, as Windows paths are), skipping any recycle bin. "" when
+// it isn't listed.
+func hierarchySection(hierarchy, path string) string {
+	d := xml.NewDecoder(strings.NewReader(hierarchy))
+	binDepth := 0 // >0 while inside a recycle-bin section group
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return ""
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "SectionGroup" && (binDepth > 0 || attr(t, "isRecycleBin") == "true") {
+				binDepth++
+			}
+			if t.Name.Local == "Section" && binDepth == 0 && strings.EqualFold(attr(t, "path"), path) {
+				return attr(t, "ID")
+			}
+		case xml.EndElement:
+			if t.Name.Local == "SectionGroup" && binDepth > 0 {
+				binDepth--
+			}
+		}
+	}
+}
+
 // hierarchyPages lists the pages in a GetHierarchy result, in the section's order.
 func hierarchyPages(hierarchy string) []RawPage {
 	var pages []RawPage

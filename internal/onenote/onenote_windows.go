@@ -39,15 +39,21 @@ var iidApplication = ole.NewGUID("{452AC71A-B655-4967-A208-A4CC39DD7949}")
 const (
 	slotGetHierarchy   = 7  // GetHierarchy(BSTR startNodeID, HierarchyScope, BSTR* xml, XMLSchema)
 	slotOpenHierarchy  = 9  // OpenHierarchy(BSTR path, BSTR relativeTo, BSTR* objectID, CreateFileType)
+	slotCloseNotebook  = 12 // CloseNotebook(BSTR notebookID, VARIANT_BOOL force)
 	slotGetPageContent = 14 // GetPageContent(BSTR pageID, BSTR* xml, PageInfo, XMLSchema)
 	slotPublish        = 20 // Publish(BSTR hierarchyID, BSTR targetFile, PublishFormat, BSTR exporterCLSID)
 )
 
 const (
-	hsPages = 4 // HierarchyScope: down to pages
-	piBasic = 0 // PageInfo: the page without its binary data (pictures, ink strokes)
-	xs2013  = 2 // XMLSchema 2013, the current one
+	hsSections = 3      // HierarchyScope: down to sections
+	hsPages    = 4      // HierarchyScope: down to pages
+	piBasic    = 0      // PageInfo: the page without its binary data (pictures, ink strokes)
+	xs2013     = 2      // XMLSchema 2013, the current one
+	varTrue    = 0xFFFF // VARIANT_BOOL true (-1 as a 16-bit value)
 )
+
+// closeWait bounds the wait for OneNote to let go of a closed notebook's folder.
+const closeWait = 5 * time.Second
 
 // Available reports whether the OneNote desktop app (with its automation interface) is
 // installed. The Store-only "OneNote for Windows 10" has none and isn't counted.
@@ -72,6 +78,7 @@ type Exporter struct {
 type request struct {
 	section, pdf string
 	pages        bool // also read each page's XML
+	open         bool // instead: list everything OneNote has open (tests)
 	reply        chan result
 }
 
@@ -101,6 +108,13 @@ func (x *Exporter) Export(ctx context.Context, section, pdf string) error {
 func (x *Exporter) ExportPages(ctx context.Context, section, pdf string) ([]RawPage, error) {
 	res, err := x.do(ctx, request{section: section, pdf: pdf, pages: true})
 	return res.pages, err
+}
+
+// open returns the hierarchy XML of everything OneNote has open, down to sections: the
+// notebooks and the loose "Open Sections". Tests check that an export leaves nothing there.
+func (x *Exporter) open(ctx context.Context) (string, error) {
+	res, err := x.do(ctx, request{open: true})
+	return res.hierarchy, err
 }
 
 func (x *Exporter) do(ctx context.Context, r request) (result, error) {
@@ -170,7 +184,12 @@ func (x *Exporter) loop() {
 					continue
 				}
 			}
-			res := x.export(app, r)
+			var res result
+			if r.open {
+				res.hierarchy, res.err = getHierarchy(app, "", hsSections)
+			} else {
+				res = x.export(app, r)
+			}
 			if disconnected(res.err) {
 				// OneNote itself went away (closed, crashed): reconnect for the next section.
 				release()
@@ -196,8 +215,16 @@ func connect() (*ole.IUnknown, error) {
 	return (*ole.IUnknown)(unsafe.Pointer(app)), nil
 }
 
-// export copies the section into a folder of Sync's own, opens the copy, publishes it and,
-// when asked, reads its pages.
+// export copies the section into a folder of Sync's own, opens that folder in OneNote as a
+// notebook of one section, publishes the section and, when asked, reads its pages, then
+// closes the notebook again.
+//
+// A notebook, not the loose section: OneNote's API can close a notebook (CloseNotebook) but
+// has no call that closes a section opened on its own. Opened as a file, each copy stayed
+// behind under OneNote's "Open Sections", unnamed and invisible in the notebook list, one more
+// per export, until OneNote crashed under hundreds of them (LabMonti, 2026-11-03). Closing
+// the notebook takes the section with it, and the folder is Sync's own, so nothing of the
+// lab's is touched.
 func (x *Exporter) export(app *ole.IUnknown, r request) result {
 	section, pdf := r.section, r.pdf
 	fail := func(err error) result { return result{err: err} }
@@ -208,14 +235,32 @@ func (x *Exporter) export(app *ole.IUnknown, r request) result {
 	if err != nil {
 		return fail(err)
 	}
-	defer os.RemoveAll(work)
+	defer removeAll(work)
 	copyPath := filepath.Join(work, "Section.one")
 	if err := copyFile(section, copyPath); err != nil {
 		return fail(fmt.Errorf("copying %s: %w", filepath.Base(section), err))
 	}
-	id, err := openHierarchy(app, copyPath)
+	notebook, err := openHierarchy(app, work)
 	if err != nil {
 		return fail(fmt.Errorf("OneNote couldn't open %s: %w", filepath.Base(section), err))
+	}
+	defer closeNotebook(app, notebook)
+	// The section is listed under the notebook as soon as OneNote has seen the folder; the
+	// wait is a safety net, like the one for pages below.
+	var id string
+	deadline := time.Now().Add(pagesWait)
+	for {
+		nb, err := getHierarchy(app, notebook, hsSections)
+		if err != nil {
+			return fail(fmt.Errorf("OneNote couldn't list %s: %w", filepath.Base(section), err))
+		}
+		if id = hierarchySection(nb, copyPath); id != "" || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if id == "" {
+		return fail(fmt.Errorf("OneNote opened %s but doesn't list it", filepath.Base(section)))
 	}
 	if pdf != "" {
 		if err := publish(app, id, pdf); err != nil {
@@ -233,7 +278,7 @@ func (x *Exporter) export(app *ole.IUnknown, r request) result {
 		// testing (2026-10-27).
 		deadline := time.Now().Add(pagesWait)
 		for {
-			if res.hierarchy, err = getHierarchy(app, id); err != nil {
+			if res.hierarchy, err = getHierarchy(app, id, hsPages); err != nil {
 				return fail(fmt.Errorf("OneNote couldn't list the pages of %s: %w", filepath.Base(section), err))
 			}
 			if !strings.Contains(res.hierarchy, `areAllPagesAvailable="false"`) || time.Now().After(deadline) {
@@ -270,12 +315,38 @@ func openHierarchy(app *ole.IUnknown, path string) (string, error) {
 	return ole.LpOleStrToString(id), nil
 }
 
-func getHierarchy(app *ole.IUnknown, id string) (string, error) {
+// closeNotebook closes a notebook OneNote has open, by force: the copy has nothing unsaved.
+func closeNotebook(app *ole.IUnknown, id string) error {
+	i := bstr(id)
+	defer free(i)
+	hr, _, _ := syscall.SyscallN(slot(app, slotCloseNotebook), uintptr(unsafe.Pointer(app)),
+		uintptr(unsafe.Pointer(i)), varTrue)
+	if hr != 0 {
+		return ole.NewError(hr)
+	}
+	return nil
+}
+
+// removeAll deletes a working folder, waiting a little for OneNote to let go of the files of
+// a notebook it has just closed.
+func removeAll(dir string) {
+	deadline := time.Now().Add(closeWait)
+	for {
+		if err := os.RemoveAll(dir); err == nil || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// getHierarchy returns OneNote's hierarchy XML under id ("" for everything open), down to
+// scope.
+func getHierarchy(app *ole.IUnknown, id string, scope uintptr) (string, error) {
 	start := bstr(id)
 	defer free(start)
 	var out *uint16
 	hr, _, _ := syscall.SyscallN(slot(app, slotGetHierarchy), uintptr(unsafe.Pointer(app)),
-		uintptr(unsafe.Pointer(start)), hsPages, uintptr(unsafe.Pointer(&out)), xs2013)
+		uintptr(unsafe.Pointer(start)), scope, uintptr(unsafe.Pointer(&out)), xs2013)
 	if hr != 0 {
 		return "", ole.NewError(hr)
 	}

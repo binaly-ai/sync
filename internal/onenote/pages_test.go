@@ -71,3 +71,25 @@ func TestParsePageNeverFails(t *testing.T) {
 		t.Fatalf("got %+v", p)
 	}
 }
+
+// A notebook opened from a working folder: its one section, plus the recycle bin OneNote adds,
+// whose "Deleted Pages" section must never be taken for it.
+const notebook = `<?xml version="1.0"?>
+<one:Notebook xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" name="section-123" ID="{N}" path="C:\x\section-123">
+<one:Section name="Section" ID="{S}" path="C:\x\section-123\Section.one"/>
+<one:SectionGroup name="OneNote_RecycleBin" ID="{G}" isRecycleBin="true">
+<one:Section name="Deleted Pages" ID="{D}" path="C:\x\section-123\OneNote_RecycleBin\OneNote_DeletedPages.one"/>
+</one:SectionGroup>
+</one:Notebook>`
+
+func TestHierarchySection(t *testing.T) {
+	if id := hierarchySection(notebook, `c:\X\SECTION-123\section.one`); id != "{S}" {
+		t.Fatalf("got %q, want {S}", id)
+	}
+	if id := hierarchySection(notebook, `C:\x\section-123\OneNote_RecycleBin\OneNote_DeletedPages.one`); id != "" {
+		t.Fatalf("a recycle-bin section was found: %q", id)
+	}
+	if id := hierarchySection(notebook, `C:\x\other.one`); id != "" {
+		t.Fatalf("a missing section was found: %q", id)
+	}
+}
