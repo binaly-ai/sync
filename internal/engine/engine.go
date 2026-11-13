@@ -164,7 +164,7 @@ type WorkspaceStatus struct {
 	Name     string               `json:"name"`
 	Email    string               `json:"email,omitempty"`
 	Server   string               `json:"server"`
-	State    string               `json:"state"` // ok | needs-sign-in | revoked | error
+	State    string               `json:"state"` // ok | needs-sign-in | revoked | paused | error
 	Error    string               `json:"error,omitempty"`
 	Progress *api.Progress        `json:"progress,omitempty"`
 	Folders  []api.FolderProgress `json:"folders,omitempty"`
@@ -568,6 +568,10 @@ func classify(err error) (string, string) {
 		return "needs-sign-in", "Sign in again to keep syncing this workspace."
 	case errors.Is(err, api.ErrRevoked):
 		return "revoked", "This computer was disconnected from the workspace in Binaly."
+	case errors.Is(err, auth.ErrPaused), errors.Is(err, api.ErrPaused):
+		// Not something to sign in for, and not a fault that passes in minutes: the lab's
+		// subscription has lapsed. Every run keeps checking, so it clears once the lab is back.
+		return "paused", "This workspace's access is paused because its subscription has lapsed. Nothing has been deleted, and syncing resumes by itself once the lab's owner renews it on the Subscription page in Binaly."
 	default:
 		return "error", err.Error()
 	}

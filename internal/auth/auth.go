@@ -29,6 +29,11 @@ import (
 // ErrNeedsSignIn means the saved sign-in is missing, expired or revoked.
 var ErrNeedsSignIn = errors.New("needs sign-in")
 
+// ErrPaused means the workspace's access is paused (its subscription lapsed). The sign-in is
+// kept: the server does not spend the refresh token, so syncing resumes on its own once the
+// lab resubscribes. The wrapping error carries the server's explanation.
+var ErrPaused = errors.New("workspace paused")
+
 // Meta is the server's OAuth discovery document (the parts Sync uses).
 type Meta struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
@@ -205,10 +210,14 @@ func exchange(ctx context.Context, endpoint string, form url.Values) (Secret, er
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
 		Error        string `json:"error"`
+		Description  string `json:"error_description"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&out)
 	if out.Error == "invalid_grant" {
 		return Secret{}, ErrNeedsSignIn
+	}
+	if out.Error == "subscription_inactive" {
+		return Secret{}, fmt.Errorf("%w: %s", ErrPaused, out.Description)
 	}
 	if res.StatusCode != 200 || out.AccessToken == "" {
 		return Secret{}, fmt.Errorf("token request failed (HTTP %d %s)", res.StatusCode, out.Error)

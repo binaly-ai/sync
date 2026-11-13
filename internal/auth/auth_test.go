@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,5 +60,41 @@ func TestRefreshDoesNotRetryA504(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("%d requests, want 1", calls.Load())
+	}
+}
+
+// A paused lab (subscription lapsed): the server refuses the renewal with
+// subscription_inactive and keeps the refresh token, so this is not a sign-out. The saved
+// sign-in must survive, and the same token renews once the lab is back (2026-11-13).
+func TestRefreshPausedKeepsTheSignIn(t *testing.T) {
+	var paused atomic.Bool
+	paused.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		if r.Form.Get("refresh_token") != "r1" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant"})
+			return
+		}
+		if paused.Load() {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "subscription_inactive", "error_description": "paused, renew at /subscription"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "new", "refresh_token": "r2", "expires_in": 3600})
+	}))
+	defer srv.Close()
+	s := expiredSource(t, srv.URL)
+	_, err := s.Token(context.Background())
+	if !errors.Is(err, ErrPaused) || errors.Is(err, ErrNeedsSignIn) {
+		t.Fatalf("got %v; want ErrPaused, not a sign-in", err)
+	}
+	if !strings.Contains(err.Error(), "renew at /subscription") {
+		t.Fatalf("the server's explanation was lost: %v", err)
+	}
+	paused.Store(false)
+	tok, err := s.Token(context.Background())
+	if err != nil || tok != "new" {
+		t.Fatalf("got %q, %v; want the same sign-in to renew once the lab is back", tok, err)
 	}
 }

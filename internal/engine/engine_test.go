@@ -500,3 +500,19 @@ func TestCheckInFailedWhenServerUnreachable(t *testing.T) {
 		t.Fatal("an unreachable server wasn't reported as a failed check-in")
 	}
 }
+
+// A paused lab is its own state, from either side: the server's 403 on a call, or a token
+// renewal refused as subscription_inactive. Never "sign in again" (2026-11-13).
+func TestClassifyPaused(t *testing.T) {
+	for _, err := range []error{
+		&api.Error{Status: 403, Code: "subscription_inactive", Detail: "paused"},
+		fmt.Errorf("%w: paused", auth.ErrPaused),
+	} {
+		if state, msg := classify(err); state != "paused" || !strings.Contains(msg, "Nothing has been deleted") {
+			t.Errorf("%v: got %q %q, want paused", err, state, msg)
+		}
+	}
+	if state, _ := classify(auth.ErrNeedsSignIn); state != "needs-sign-in" {
+		t.Errorf("a real sign-out became %q", state)
+	}
+}

@@ -54,6 +54,9 @@ func (e *Error) Is(target error) bool {
 var (
 	ErrRevoked    = &Error{Code: "revoked"}
 	ErrNotSyncing = &Error{Code: "not-syncing"}
+	// ErrPaused: the workspace's access is paused (403 from the server). Nothing is deleted;
+	// syncing resumes on its own once the lab resubscribes.
+	ErrPaused = &Error{Code: "subscription_inactive"}
 )
 
 func (c *Client) http() *http.Client {

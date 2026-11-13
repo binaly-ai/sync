@@ -333,7 +333,7 @@ function renderStatus(s) {
   $("empty").hidden = wss.length > 0;
   $("workspaces").innerHTML = wss.map((w) => {
     const bad = w.state !== "ok";
-    const badge = { ok: "", "needs-sign-in": "Needs sign-in", revoked: "Disconnected", error: "Problem" }[w.state] ?? w.state;
+    const badge = { ok: "", "needs-sign-in": "Needs sign-in", revoked: "Disconnected", paused: "Paused", error: "Problem" }[w.state] ?? w.state;
     const folders = (w.folders || []).map((f) => `
       <div class="folder">
         <div class="path">${esc(f.path)}</div>
